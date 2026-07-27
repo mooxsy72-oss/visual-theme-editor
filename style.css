@@ -1,0 +1,2791 @@
+/* ============================================================
+   Visual Theme Editor — стили интерфейса
+   Часть 1: токены, оверлеи выбора, панель инспектора
+   Панели самодостаточны: не наследуют цвета темы, чтобы редактор
+   оставался читаемым на любой пользовательской теме.
+============================================================ */
+
+#vte-inspector-panel,
+#vte-code-panel,
+#vte-colorpicker {
+    /* Поверхности */
+    --vte-bg:          #14161a;
+    --vte-bg-soft:     #191c21;
+    --vte-bg-raised:   #1e2228;
+    --vte-bg-inset:    #0f1114;
+
+    /* Границы */
+    --vte-line:        #2a2f37;
+    --vte-line-soft:   #22262c;
+    --vte-line-strong: #363d47;
+
+    /* Текст */
+    --vte-fg:          #dfe4ea;
+    --vte-fg-dim:      #99a2ad;
+    --vte-fg-mute:     #6b7480;
+
+    /* Акценты */
+    --vte-accent:      #4ea1ff;
+    --vte-accent-soft: rgba(78, 161, 255, 0.14);
+    --vte-ok:          #4ec97f;
+    --vte-warn:        #e0a458;
+    --vte-danger:      #e5605f;
+    --vte-var:         #c48fe8;
+
+    /* Геометрия */
+    --vte-radius:      8px;
+    --vte-radius-sm:   5px;
+    --vte-gap:         8px;
+    --vte-pad:         10px;
+
+    /* Тень */
+    --vte-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+
+    /* Типографика */
+    --vte-font: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --vte-mono: 'JetBrains Mono', 'Consolas', 'SF Mono', ui-monospace, monospace;
+    --vte-fs: 12px;
+
+    /* Плавность */
+    --vte-t: 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============================================================
+   ОБЩИЙ СБРОС ВНУТРИ ПАНЕЛЕЙ
+   Темы часто ставят !important на глобальные селекторы,
+   поэтому базу задаём жёстко.
+============================================================ */
+#vte-inspector-panel,
+#vte-inspector-panel *,
+#vte-code-panel,
+#vte-code-panel *,
+#vte-colorpicker,
+#vte-colorpicker * {
+    box-sizing: border-box !important;
+    font-family: var(--vte-font) !important;
+    animation: none !important;
+    text-transform: none !important;
+    letter-spacing: normal !important;
+    text-shadow: none !important;
+}
+
+#vte-inspector-panel button,
+#vte-code-panel button,
+#vte-colorpicker button {
+    margin: 0 !important;
+    font-size: var(--vte-fs) !important;
+    line-height: 1.2 !important;
+    cursor: pointer !important;
+    background: none;
+    border: none;
+    color: inherit;
+}
+
+#vte-inspector-panel input,
+#vte-inspector-panel select,
+#vte-colorpicker input {
+    margin: 0 !important;
+    min-height: 0 !important;
+    box-shadow: none !important;
+}
+
+/* Гасим декор темы, но не трогаем content — иначе ломаются иконки и галочки */
+#vte-inspector-panel *::before,
+#vte-inspector-panel *::after,
+#vte-code-panel *::before,
+#vte-code-panel *::after,
+#vte-colorpicker *::before,
+#vte-colorpicker *::after {
+    background-image: none !important;
+    text-shadow: none !important;
+}
+
+/* ============================================================
+   РЕЖИМ ВЫБОРА ЭЛЕМЕНТА
+============================================================ */
+body.vte-picking,
+body.vte-picking * {
+    cursor: crosshair !important;
+}
+
+body.vte-picking #vte-inspector-panel,
+body.vte-picking #vte-inspector-panel *,
+body.vte-picking #vte-code-panel,
+body.vte-picking #vte-code-panel *,
+body.vte-picking #vte-colorpicker,
+body.vte-picking #vte-colorpicker * {
+    cursor: default !important;
+}
+
+/* Основная рамка */
+.vte-pick-box {
+    border: 1px dashed var(--vte-accent, #4ea1ff);
+    background: rgba(78, 161, 255, 0.08);
+    box-shadow:
+        0 0 0 1px rgba(78, 161, 255, 0.35),
+        0 0 14px rgba(78, 161, 255, 0.45);
+    border-radius: 2px;
+    transition: none;
+}
+
+/* Область padding — зелёная штриховка */
+.vte-pick-padding {
+    background:
+        repeating-linear-gradient(
+            45deg,
+            rgba(78, 201, 127, 0.10) 0 6px,
+            transparent 6px 12px
+        );
+    outline: 1px dashed rgba(78, 201, 127, 0.4);
+    outline-offset: -1px;
+}
+
+/* Область margin — оранжевая штриховка */
+.vte-pick-margin {
+    background:
+        repeating-linear-gradient(
+            -45deg,
+            rgba(224, 164, 88, 0.10) 0 6px,
+            transparent 6px 12px
+        );
+    outline: 1px dashed rgba(224, 164, 88, 0.35);
+    outline-offset: -1px;
+}
+
+/* Метка с тегом и классами */
+.vte-pick-label {
+    padding: 3px 7px;
+    max-width: 70vw;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background: #4ea1ff;
+    color: #ffffff;
+    border-radius: 4px;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Размеры элемента */
+.vte-pick-size {
+    padding: 2px 6px;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    background: rgba(15, 17, 20, 0.94);
+    color: #dfe4ea;
+    border: 1px solid rgba(78, 161, 255, 0.4);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+/* Подсказка по управлению */
+.vte-pick-hint {
+    position: fixed !important;
+    left: 50% !important;
+    bottom: 16px !important;
+    top: auto !important;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 16px;
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+    font-size: 11.5px;
+    color: #99a2ad;
+    background: rgba(20, 22, 26, 0.96);
+    border: 1px solid #2a2f37;
+    border-radius: 999px;
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    white-space: nowrap;
+}
+
+.vte-pick-hint-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.vte-pick-hint kbd {
+    padding: 2px 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: #dfe4ea;
+    background: #1e2228;
+    border: 1px solid #363d47;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+}
+
+/* ============================================================
+   ПАНЕЛЬ ИНСПЕКТОРА
+============================================================ */
+.vte-panel {
+    position: fixed;
+    top: 64px;
+    right: 16px;
+    z-index: 2147483630;
+
+    display: flex;
+    flex-direction: column;
+    width: 340px;
+    max-height: calc(100vh - 96px);
+
+    font-size: var(--vte-fs);
+    color: var(--vte-fg);
+    background: var(--vte-bg);
+    border: 1px solid var(--vte-line);
+    border-radius: var(--vte-radius);
+    box-shadow: var(--vte-shadow);
+    overflow: hidden;
+}
+
+.vte-panel.vte-dragging {
+    opacity: 0.94;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+}
+
+.vte-panel.vte-collapsed > *:not(.vte-header) {
+    display: none !important;
+}
+
+/* ---- Шапка ---- */
+.vte-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--vte-gap);
+    flex-shrink: 0;
+    padding: 9px 10px;
+    background: linear-gradient(180deg, var(--vte-bg-raised), var(--vte-bg-soft));
+    border-bottom: 1px solid var(--vte-line);
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+
+.vte-header:active {
+    cursor: grabbing;
+}
+
+.vte-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em !important;
+}
+
+.vte-title-ic {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+    color: var(--vte-accent);
+    background: var(--vte-accent-soft);
+    border-radius: var(--vte-radius-sm);
+}
+
+.vte-header-btns {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.vte-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    font-size: 11.5px;
+    color: var(--vte-fg-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--vte-radius-sm);
+    transition: color var(--vte-t), background var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-icon-btn:hover:not(:disabled) {
+    color: var(--vte-fg);
+    background: var(--vte-bg-raised);
+    border-color: var(--vte-line);
+}
+
+.vte-icon-btn:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.vte-icon-btn:disabled {
+    opacity: 0.32;
+    cursor: not-allowed !important;
+}
+
+.vte-icon-btn-close:hover {
+    color: #fff;
+    background: var(--vte-danger);
+    border-color: var(--vte-danger);
+}
+
+/* ---- Пустое состояние ---- */
+.vte-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 32px 20px;
+    text-align: center;
+    color: var(--vte-fg-dim);
+}
+
+.vte-empty > div {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--vte-fg);
+}
+
+.vte-empty small {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--vte-fg-mute);
+}
+
+.vte-empty-ic {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    margin-bottom: 4px;
+    font-size: 16px;
+    color: var(--vte-accent);
+    background: var(--vte-accent-soft);
+    border-radius: 50%;
+}
+
+/* ---- Содержимое ---- */
+.vte-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+}
+
+/* ---- Строка селектора ---- */
+.vte-selector-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 8px 10px;
+    background: var(--vte-bg-inset);
+    border-bottom: 1px solid var(--vte-line-soft);
+}
+
+.vte-selector-ic {
+    color: var(--vte-fg-mute);
+    font-size: 10px;
+}
+
+.vte-selector-input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 11px !important;
+    color: var(--vte-accent) !important;
+    background: var(--vte-bg) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: var(--vte-radius-sm) !important;
+    cursor: text;
+    text-overflow: ellipsis;
+}
+
+/* ---- Хлебные крошки ---- */
+.vte-crumbs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 6px 10px;
+    overflow-x: auto;
+    white-space: nowrap;
+    background: var(--vte-bg-soft);
+    border-bottom: 1px solid var(--vte-line-soft);
+    scrollbar-width: none;
+}
+
+.vte-crumbs::-webkit-scrollbar {
+    height: 0;
+}
+
+.vte-crumb {
+    flex-shrink: 0;
+    padding: 3px 7px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px !important;
+    color: var(--vte-fg-mute) !important;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    transition: color var(--vte-t), background var(--vte-t);
+}
+
+.vte-crumb:hover {
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-raised);
+}
+
+.vte-crumb.active {
+    color: var(--vte-accent) !important;
+    background: var(--vte-accent-soft);
+    border-color: rgba(78, 161, 255, 0.3);
+}
+
+.vte-crumb-sep {
+    flex-shrink: 0;
+    color: var(--vte-fg-mute);
+    font-size: 11px;
+    opacity: 0.5;
+}
+
+/* ---- Режим переменных ---- */
+.vte-mode-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--vte-gap);
+    flex-shrink: 0;
+    padding: 7px 10px;
+    background: var(--vte-bg-soft);
+    border-bottom: 1px solid var(--vte-line-soft);
+}
+
+.vte-check {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 6px;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 11.5px;
+    color: var(--vte-fg-dim);
+    cursor: pointer;
+    user-select: none;
+    background: none !important;
+    border: none !important;
+}
+
+.vte-check:hover {
+    color: var(--vte-fg);
+}
+
+.vte-check input[type='checkbox'] {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    flex-shrink: 0;
+    width: 14px !important;
+    height: 14px !important;
+    padding: 0 !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line-strong) !important;
+    border-radius: 3px !important;
+    cursor: pointer;
+    position: relative;
+    transition: background var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-check input[type='checkbox']:checked {
+    background: var(--vte-accent) !important;
+    border-color: var(--vte-accent) !important;
+}
+
+.vte-check input[type='checkbox']:checked::after {
+    content: '' !important;
+    display: block !important;
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.vte-var-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 55%;
+    padding: 3px 7px;
+    font-size: 10.5px;
+    color: var(--vte-fg-mute);
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: 999px;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: color var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-var-hint code {
+    font-family: var(--vte-mono) !important;
+    font-size: 10px;
+    color: inherit;
+    background: none;
+    padding: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.vte-var-hint.vte-var-active {
+    color: var(--vte-var);
+    border-color: rgba(196, 143, 232, 0.4);
+    background: rgba(196, 143, 232, 0.1);
+}
+
+/* ---- Табы ---- */
+.vte-tabs {
+    display: flex;
+    flex-shrink: 0;
+    background: var(--vte-bg-soft);
+    border-bottom: 1px solid var(--vte-line);
+}
+
+.vte-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 8px 2px !important;
+    font-size: 9.5px !important;
+    color: var(--vte-fg-mute) !important;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    transition: color var(--vte-t), background var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-tab i {
+    font-size: 13px;
+}
+
+.vte-tab-label {
+    font-size: 9.5px;
+    line-height: 1;
+}
+
+.vte-tab:hover {
+    color: var(--vte-fg-dim) !important;
+    background: var(--vte-bg-raised);
+}
+
+.vte-tab.active {
+    color: var(--vte-accent) !important;
+    background: var(--vte-bg);
+    border-bottom-color: var(--vte-accent);
+}
+
+/* ---- Области вкладок ---- */
+.vte-panes {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.vte-pane {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--vte-pad);
+}
+
+.vte-pane.active {
+    display: flex;
+}
+
+/* ---- Секция (сворачиваемая) ---- */
+.vte-section {
+    display: flex;
+    flex-direction: column;
+    margin: 4px 0 2px;
+    background: var(--vte-bg-soft);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: var(--vte-radius-sm);
+    overflow: hidden;
+}
+
+.vte-section-head {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 7px 9px !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    color: var(--vte-fg-dim) !important;
+    background: var(--vte-bg-raised);
+    border: none;
+    text-align: left;
+    transition: color var(--vte-t), background var(--vte-t);
+}
+
+.vte-section-head:hover {
+    color: var(--vte-fg) !important;
+    background: #23282f;
+}
+
+.vte-section-chev {
+    font-size: 9px;
+    color: var(--vte-fg-mute);
+    transition: transform var(--vte-t);
+}
+
+.vte-section-chev.vte-rotated {
+    transform: rotate(-90deg);
+}
+
+.vte-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px 8px;
+}
+
+.vte-subgroup {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: var(--vte-radius-sm);
+}
+
+/* ---- Поле свойства ---- */
+.vte-field {
+    display: flex;
+    align-items: center;
+    gap: var(--vte-gap);
+    min-height: 28px;
+    padding: 3px 0;
+}
+
+.vte-field-label {
+    flex-shrink: 0;
+    width: 92px;
+    font-size: 11px;
+    color: var(--vte-fg-dim);
+    line-height: 1.3;
+    user-select: none;
+}
+
+.vte-field-body {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+
+/* ---- Ползунок ---- */
+.vte-range {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    flex: 1;
+    min-width: 40px;
+    height: 16px !important;
+    padding: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    cursor: pointer;
+}
+
+.vte-range::-webkit-slider-runnable-track {
+    height: 3px;
+    background: var(--vte-line-strong);
+    border-radius: 2px;
+    border: none;
+}
+
+.vte-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -4.5px;
+    background: var(--vte-fg);
+    border: 2px solid var(--vte-bg);
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    transition: background var(--vte-t), transform var(--vte-t);
+}
+
+.vte-range:hover::-webkit-slider-thumb {
+    background: var(--vte-accent);
+    transform: scale(1.15);
+}
+
+.vte-range::-moz-range-track {
+    height: 3px;
+    background: var(--vte-line-strong);
+    border-radius: 2px;
+    border: none;
+}
+
+.vte-range::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: var(--vte-fg);
+    border: 2px solid var(--vte-bg);
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+.vte-range:hover::-moz-range-thumb {
+    background: var(--vte-accent);
+}
+
+.vte-range-val {
+    flex-shrink: 0;
+    min-width: 42px;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px;
+    color: var(--vte-fg-mute);
+    text-align: right;
+    user-select: none;
+}
+
+/* ---- Числовое поле рядом с ползунком ---- */
+.vte-num-inline {
+    flex-shrink: 0;
+    width: 48px;
+    padding: 4px 5px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: 4px !important;
+    text-align: center;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+.vte-num-inline::-webkit-outer-spin-button,
+.vte-num-inline::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.vte-num-inline:focus,
+.vte-input:focus,
+.vte-hex:focus,
+.vte-select:focus,
+.vte-box-input:focus {
+    outline: none !important;
+    border-color: var(--vte-accent) !important;
+    box-shadow: 0 0 0 2px var(--vte-accent-soft) !important;
+}
+
+/* ---- Текстовое поле ---- */
+.vte-input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 11px !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: var(--vte-radius-sm) !important;
+    transition: border-color var(--vte-t), box-shadow var(--vte-t);
+}
+
+.vte-input::placeholder {
+    color: var(--vte-fg-mute) !important;
+    opacity: 0.7 !important;
+}
+
+/* ---- Выпадающий список ---- */
+.vte-select {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 24px 5px 8px !important;
+    font-size: 11px !important;
+    color: var(--vte-fg) !important;
+    background-color: var(--vte-bg-inset) !important;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--vte-fg-mute) 50%),
+        linear-gradient(135deg, var(--vte-fg-mute) 50%, transparent 50%) !important;
+    background-position:
+        calc(100% - 13px) calc(50% - 1px),
+        calc(100% - 8px) calc(50% - 1px) !important;
+    background-size: 5px 5px, 5px 5px !important;
+    background-repeat: no-repeat !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: var(--vte-radius-sm) !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    cursor: pointer;
+}
+
+.vte-select option {
+    background: #1a1d22 !important;
+    color: var(--vte-fg) !important;
+}
+
+/* ---- Сегментированный переключатель ---- */
+.vte-seg {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line);
+    border-radius: var(--vte-radius-sm);
+    overflow: hidden;
+}
+
+.vte-seg-btn {
+    flex: 1;
+    padding: 5px 4px !important;
+    font-size: 10px !important;
+    color: var(--vte-fg-mute) !important;
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--vte-line-soft);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color var(--vte-t), background var(--vte-t);
+}
+
+.vte-seg-btn:last-child {
+    border-right: none;
+}
+
+.vte-seg-btn:hover {
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-raised);
+}
+
+.vte-seg-btn.active {
+    color: #fff !important;
+    background: var(--vte-accent);
+}
+
+/* ---- Свотч цвета ---- */
+.vte-swatch {
+    flex-shrink: 0;
+    width: 30px;
+    height: 24px;
+    padding: 0 !important;
+    border: 1px solid var(--vte-line-strong) !important;
+    border-radius: var(--vte-radius-sm);
+    /* Шахматка под прозрачными цветами */
+    background-image:
+        linear-gradient(45deg, #2a2f37 25%, transparent 25%),
+        linear-gradient(-45deg, #2a2f37 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #2a2f37 75%),
+        linear-gradient(-45deg, transparent 75%, #2a2f37 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+    position: relative;
+    overflow: hidden;
+    transition: border-color var(--vte-t), transform var(--vte-t);
+}
+
+.vte-swatch::after {
+    content: '' !important;
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    background: inherit;
+    background-image: none;
+}
+
+.vte-swatch:hover {
+    border-color: var(--vte-accent) !important;
+    transform: scale(1.06);
+}
+
+/* ---- HEX-поле ---- */
+.vte-hex {
+    flex: 1;
+    min-width: 60px;
+    padding: 5px 7px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px !important;
+    text-transform: lowercase !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: var(--vte-radius-sm) !important;
+}
+
+/* ---- Ползунок альфы ---- */
+.vte-alpha-wrap {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1.2;
+    min-width: 0;
+}
+
+.vte-range-alpha::-webkit-slider-runnable-track {
+    height: 5px;
+    border-radius: 3px;
+    background:
+        linear-gradient(90deg, transparent, currentColor),
+        repeating-conic-gradient(#2a2f37 0% 25%, #14161a 0% 50%) 0 0 / 6px 6px;
+}
+
+.vte-range-alpha::-moz-range-track {
+    height: 5px;
+    border-radius: 3px;
+    background:
+        linear-gradient(90deg, transparent, currentColor),
+        repeating-conic-gradient(#2a2f37 0% 25%, #14161a 0% 50%) 0 0 / 6px 6px;
+}
+
+/* ---- Сетка padding/margin ---- */
+.vte-box {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.vte-box-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 5px;
+}
+
+.vte-box-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+}
+
+.vte-box-label {
+    font-size: 9px;
+    color: var(--vte-fg-mute);
+    user-select: none;
+}
+
+.vte-box-input {
+    width: 100%;
+    padding: 5px 3px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: 4px !important;
+    text-align: center;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+.vte-box-input::-webkit-outer-spin-button,
+.vte-box-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.vte-box-link {
+    align-self: flex-start;
+    font-size: 10.5px;
+}
+
+/* ---- Мелкие пояснения ---- */
+.vte-note {
+    display: block;
+    padding: 4px 0 0;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--vte-fg-mute);
+}
+
+.vte-muted {
+    font-family: var(--vte-mono) !important;
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---- Статус ---- */
+.vte-status {
+    flex-shrink: 0;
+    max-height: 0;
+    padding: 0 10px;
+    font-size: 10.5px;
+    color: var(--vte-ok);
+    background: rgba(78, 201, 127, 0.1);
+    border-top: 1px solid transparent;
+    overflow: hidden;
+    transition: max-height var(--vte-t), padding var(--vte-t);
+}
+
+.vte-status.vte-status-show {
+    max-height: 30px;
+    padding: 6px 10px;
+    border-top-color: rgba(78, 201, 127, 0.25);
+}
+
+/* ---- Низ панели ---- */
+.vte-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 8px 10px;
+    background: var(--vte-bg-soft);
+    border-top: 1px solid var(--vte-line);
+}
+
+.vte-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    flex: 1;
+    padding: 7px 10px !important;
+    font-size: 11.5px !important;
+    font-weight: 500 !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-raised);
+    border: 1px solid var(--vte-line-strong);
+    border-radius: var(--vte-radius-sm);
+    transition: background var(--vte-t), border-color var(--vte-t), transform var(--vte-t);
+}
+
+.vte-btn:hover {
+    background: #262b32;
+    border-color: var(--vte-fg-mute);
+}
+
+.vte-btn:active {
+    transform: translateY(1px);
+}
+
+.vte-btn-primary {
+    color: #fff !important;
+    background: var(--vte-accent);
+    border-color: var(--vte-accent);
+}
+
+.vte-btn-primary:hover {
+    background: #5fadff;
+    border-color: #5fadff;
+}
+
+.vte-btn-ghost {
+    flex: 0.8;
+    color: var(--vte-fg-dim) !important;
+    background: transparent;
+}
+
+.vte-btn-ghost:hover {
+    color: var(--vte-danger) !important;
+    background: rgba(229, 96, 95, 0.12);
+    border-color: rgba(229, 96, 95, 0.4);
+}
+
+/* ---- Скроллбары внутри панелей ---- */
+.vte-panes::-webkit-scrollbar,
+.vte-fonts-list::-webkit-scrollbar,
+.vte-code-problems::-webkit-scrollbar {
+    width: 8px;
+}
+
+.vte-panes::-webkit-scrollbar-track,
+.vte-fonts-list::-webkit-scrollbar-track,
+.vte-code-problems::-webkit-scrollbar-track {
+    background: var(--vte-bg-inset);
+}
+
+.vte-panes::-webkit-scrollbar-thumb,
+.vte-fonts-list::-webkit-scrollbar-thumb,
+.vte-code-problems::-webkit-scrollbar-thumb {
+    background: var(--vte-line-strong);
+    border-radius: 4px;
+    border: 2px solid var(--vte-bg-inset);
+}
+
+.vte-panes::-webkit-scrollbar-thumb:hover,
+.vte-fonts-list::-webkit-scrollbar-thumb:hover {
+    background: var(--vte-fg-mute);
+}
+/* ============================================================
+   Visual Theme Editor — стили, часть 2
+   COLOR PICKER · FONTS · CODE PANEL · SETTINGS · MOBILE
+============================================================ */
+
+/* ============================================================
+   COLOR PICKER
+============================================================ */
+.vte-cp {
+    position: fixed;
+    z-index: 2147483645;
+
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 268px;
+    padding: 10px;
+
+    font-size: var(--vte-fs);
+    color: var(--vte-fg);
+    background: var(--vte-bg);
+    border: 1px solid var(--vte-line-strong);
+    border-radius: var(--vte-radius);
+    box-shadow: var(--vte-shadow);
+}
+
+/* ---- Табы режима ---- */
+.vte-cp-tabs {
+    display: flex;
+    gap: 3px;
+    padding: 3px;
+    background: var(--vte-bg-inset);
+    border-radius: var(--vte-radius-sm);
+}
+
+.vte-cp-tab {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 4px !important;
+    font-size: 10px !important;
+    color: var(--vte-fg-mute) !important;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: color var(--vte-t), background var(--vte-t);
+}
+
+.vte-cp-tab i {
+    font-size: 10px;
+}
+
+.vte-cp-tab:hover {
+    color: var(--vte-fg) !important;
+}
+
+.vte-cp-tab.active {
+    color: #fff !important;
+    background: var(--vte-accent);
+}
+
+/* ---- HSV-поле ---- */
+.vte-cp-solid {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.vte-cp-sat {
+    position: relative;
+    width: 100%;
+    height: 132px;
+    border-radius: var(--vte-radius-sm);
+    cursor: crosshair;
+    overflow: hidden;
+    touch-action: none;
+}
+
+.vte-cp-sat-white,
+.vte-cp-sat-black {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.vte-cp-sat-white {
+    background: linear-gradient(90deg, #fff, transparent);
+}
+
+.vte-cp-sat-black {
+    background: linear-gradient(0deg, #000, transparent);
+}
+
+.vte-cp-cursor {
+    position: absolute;
+    width: 13px;
+    height: 13px;
+    margin: -6.5px 0 0 -6.5px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.5),
+        0 1px 5px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+}
+
+/* ---- Ползунки оттенка и альфы ---- */
+.vte-cp-hue,
+.vte-cp-alpha {
+    position: relative;
+    width: 100%;
+    height: 11px;
+    border-radius: 6px;
+    cursor: pointer;
+    touch-action: none;
+}
+
+.vte-cp-hue {
+    background: linear-gradient(
+        90deg,
+        #f00 0%, #ff0 17%, #0f0 33%,
+        #0ff 50%, #00f 67%, #f0f 83%, #f00 100%
+    );
+}
+
+.vte-cp-alpha {
+    background: repeating-conic-gradient(
+        #2a2f37 0% 25%, #14161a 0% 50%
+    ) 0 0 / 8px 8px;
+    overflow: hidden;
+}
+
+.vte-cp-alpha-fill {
+    position: absolute;
+    inset: 0;
+    border-radius: 6px;
+    pointer-events: none;
+}
+
+.vte-cp-thumb {
+    position: absolute;
+    top: 50%;
+    width: 15px;
+    height: 15px;
+    margin: -7.5px 0 0 -7.5px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.45),
+        0 1px 4px rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+}
+
+/* ---- Ряд ввода ---- */
+.vte-cp-inputs {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.vte-cp-preview {
+    flex-shrink: 0;
+    width: 28px;
+    height: 26px;
+    border: 1px solid var(--vte-line-strong);
+    border-radius: var(--vte-radius-sm);
+    background-color: transparent;
+    background-image:
+        repeating-conic-gradient(#2a2f37 0% 25%, #14161a 0% 50%);
+    background-size: 8px 8px;
+}
+
+.vte-cp-icon-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    font-size: 11px;
+    color: var(--vte-fg-dim);
+    background: var(--vte-bg-raised);
+    border: 1px solid var(--vte-line) !important;
+    border-radius: var(--vte-radius-sm);
+    transition: color var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-cp-icon-btn:hover:not(:disabled) {
+    color: var(--vte-accent);
+    border-color: var(--vte-accent) !important;
+}
+
+.vte-cp-icon-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed !important;
+}
+
+.vte-cp-hex {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 6px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px !important;
+    text-transform: lowercase !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: 4px !important;
+}
+
+.vte-cp-alpha-num {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 0 5px 0 0;
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line);
+    border-radius: 4px;
+}
+
+.vte-cp-num {
+    width: 34px;
+    padding: 5px 2px 5px 5px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px !important;
+    color: var(--vte-fg) !important;
+    background: transparent !important;
+    border: none !important;
+    text-align: right;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+.vte-cp-num::-webkit-outer-spin-button,
+.vte-cp-num::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.vte-cp-unit {
+    font-size: 9.5px;
+    color: var(--vte-fg-mute);
+}
+
+/* ---- Итоговое значение ---- */
+.vte-cp-out {
+    padding: 5px 7px;
+    font-family: var(--vte-mono) !important;
+    font-size: 10px;
+    color: var(--vte-fg-dim);
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-cp-out:hover {
+    color: var(--vte-fg);
+    border-color: var(--vte-line-strong);
+}
+
+.vte-cp-out.vte-cp-copied {
+    color: var(--vte-ok);
+    border-color: rgba(78, 201, 127, 0.5);
+}
+
+/* ---- Градиент ---- */
+.vte-cp-grad-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: var(--vte-radius-sm);
+}
+
+.vte-cp-grad {
+    position: relative;
+    padding-bottom: 14px;
+}
+
+.vte-cp-grad-bar {
+    width: 100%;
+    height: 22px;
+    border: 1px solid var(--vte-line-strong);
+    border-radius: 4px;
+    cursor: copy;
+    background-color: transparent;
+}
+
+.vte-cp-grad-stops {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 14px;
+    pointer-events: none;
+}
+
+.vte-cp-stop {
+    position: absolute;
+    top: 0;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    border: 2px solid var(--vte-fg-mute);
+    border-radius: 3px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    cursor: grab;
+    pointer-events: auto;
+    touch-action: none;
+    transition: border-color var(--vte-t), transform var(--vte-t);
+}
+
+.vte-cp-stop:hover {
+    transform: scale(1.15);
+}
+
+.vte-cp-stop.active {
+    border-color: #fff;
+    transform: scale(1.2);
+    z-index: 2;
+}
+
+.vte-cp-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.vte-cp-label {
+    flex-shrink: 0;
+    width: 54px;
+    font-size: 10.5px;
+    color: var(--vte-fg-dim);
+}
+
+.vte-cp-range {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    flex: 1;
+    min-width: 0;
+    height: 14px !important;
+    padding: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    cursor: pointer;
+}
+
+.vte-cp-range::-webkit-slider-runnable-track {
+    height: 3px;
+    background: var(--vte-line-strong);
+    border-radius: 2px;
+}
+
+.vte-cp-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 11px;
+    height: 11px;
+    margin-top: -4px;
+    background: var(--vte-fg);
+    border: 2px solid var(--vte-bg-inset);
+    border-radius: 50%;
+}
+
+.vte-cp-range::-moz-range-track {
+    height: 3px;
+    background: var(--vte-line-strong);
+    border-radius: 2px;
+}
+
+.vte-cp-range::-moz-range-thumb {
+    width: 11px;
+    height: 11px;
+    background: var(--vte-fg);
+    border: 2px solid var(--vte-bg-inset);
+    border-radius: 50%;
+}
+
+.vte-cp-range-val {
+    flex-shrink: 0;
+    min-width: 34px;
+    font-family: var(--vte-mono) !important;
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+    text-align: right;
+}
+
+.vte-cp-grad-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.vte-cp-mini-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 5px 3px !important;
+    font-size: 9.5px !important;
+    color: var(--vte-fg-dim) !important;
+    background: var(--vte-bg-raised);
+    border: 1px solid var(--vte-line) !important;
+    border-radius: 4px;
+    white-space: nowrap;
+    transition: color var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-cp-mini-btn:hover:not(:disabled) {
+    color: var(--vte-fg) !important;
+    border-color: var(--vte-line-strong) !important;
+}
+
+.vte-cp-mini-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed !important;
+}
+
+/* ---- Палитры ---- */
+.vte-cp-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vte-cp-section-head {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--vte-fg-mute);
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+}
+
+.vte-cp-swatches {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(20px, 1fr));
+    gap: 4px;
+    max-height: 84px;
+    overflow-y: auto;
+}
+
+.vte-cp-swatch {
+    width: 100%;
+    aspect-ratio: 1;
+    padding: 0 !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: 3px;
+    transition: transform var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-cp-swatch:hover {
+    transform: scale(1.15);
+    border-color: #fff !important;
+    z-index: 2;
+}
+
+/* ---- Низ пикера ---- */
+.vte-cp-footer {
+    display: flex;
+    gap: 5px;
+}
+
+.vte-cp-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 8px !important;
+    font-size: 11px !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-raised);
+    border: 1px solid var(--vte-line-strong) !important;
+    border-radius: var(--vte-radius-sm);
+    transition: background var(--vte-t);
+}
+
+.vte-cp-btn:hover {
+    background: #262b32;
+}
+
+.vte-cp-btn-primary {
+    color: #fff !important;
+    background: var(--vte-accent);
+    border-color: var(--vte-accent) !important;
+}
+
+.vte-cp-btn-primary:hover {
+    background: #5fadff;
+}
+
+/* ============================================================
+   ВКЛАДКА ШРИФТОВ
+============================================================ */
+.vte-fonts {
+    gap: 8px !important;
+}
+
+.vte-fonts-search {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 7px;
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line);
+    border-radius: var(--vte-radius-sm);
+}
+
+.vte-search-ic {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+}
+
+.vte-fonts-search .vte-input {
+    background: transparent !important;
+    border: none !important;
+    padding: 6px 0 !important;
+    font-family: var(--vte-font) !important;
+    font-size: 11.5px !important;
+}
+
+.vte-fonts-search .vte-input:focus {
+    box-shadow: none !important;
+}
+
+.vte-fonts-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+}
+
+.vte-fonts-cats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+}
+
+.vte-font-cat {
+    padding: 4px 9px !important;
+    font-size: 10px !important;
+    color: var(--vte-fg-mute) !important;
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line) !important;
+    border-radius: 999px;
+    transition: color var(--vte-t), background var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-font-cat:hover {
+    color: var(--vte-fg) !important;
+    border-color: var(--vte-line-strong) !important;
+}
+
+.vte-font-cat.active {
+    color: #fff !important;
+    background: var(--vte-accent);
+    border-color: var(--vte-accent) !important;
+}
+
+.vte-fonts-options {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px;
+    background: var(--vte-bg-soft);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: var(--vte-radius-sm);
+}
+
+.vte-fonts-options .vte-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.vte-fonts-options .vte-label {
+    flex-shrink: 0;
+    width: 84px;
+    font-size: 11px;
+    color: var(--vte-fg-dim);
+}
+
+.vte-fonts-counter {
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+    text-align: right;
+}
+
+.vte-fonts-counter span:first-child {
+    font-weight: 600;
+    color: var(--vte-fg-dim);
+}
+
+/* ---- Список карточек ---- */
+.vte-fonts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    padding-right: 2px;
+    overscroll-behavior: contain;
+}
+
+.vte-font-card {
+    padding: 8px 10px;
+    background: var(--vte-bg-soft);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: var(--vte-radius-sm);
+    cursor: pointer;
+    transition: border-color var(--vte-t), background var(--vte-t), transform var(--vte-t);
+}
+
+.vte-font-card:hover {
+    background: var(--vte-bg-raised);
+    border-color: var(--vte-line-strong);
+    transform: translateX(2px);
+}
+
+.vte-font-card.selected {
+    background: var(--vte-accent-soft);
+    border-color: var(--vte-accent);
+}
+
+.vte-font-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 5px;
+}
+
+.vte-font-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--vte-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vte-font-badges {
+    display: flex;
+    gap: 3px;
+    flex-shrink: 0;
+}
+
+.vte-badge {
+    padding: 1px 5px;
+    font-size: 8.5px;
+    font-weight: 600;
+    color: var(--vte-fg-mute);
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line);
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+.vte-badge-cyr {
+    color: var(--vte-ok);
+    background: rgba(78, 201, 127, 0.12);
+    border-color: rgba(78, 201, 127, 0.35);
+}
+
+.vte-badge-dim {
+    opacity: 0.6;
+}
+
+.vte-font-sample {
+    font-size: 17px;
+    line-height: 1.35;
+    color: var(--vte-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vte-font-glyphs {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--vte-fg-mute);
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.vte-fonts-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--vte-fg-mute);
+}
+
+.vte-fonts-empty > div {
+    font-size: 12px;
+    color: var(--vte-fg-dim);
+}
+
+.vte-fonts-empty small {
+    font-size: 10px;
+    line-height: 1.5;
+}
+
+.vte-fonts-empty .vte-empty-ic {
+    width: 34px;
+    height: 34px;
+    font-size: 14px;
+}
+
+/* ---- Низ вкладки шрифтов ---- */
+.vte-fonts-footer {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding-top: 6px;
+    border-top: 1px solid var(--vte-line-soft);
+}
+
+.vte-fonts-current {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--vte-fg-dim);
+    overflow: hidden;
+}
+
+.vte-fonts-current strong {
+    color: var(--vte-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vte-fonts-current.vte-ok,
+.vte-fonts-current.vte-ok strong {
+    color: var(--vte-ok);
+}
+
+.vte-font-current-ic {
+    flex-shrink: 0;
+    font-size: 10px;
+    opacity: 0.8;
+}
+
+.vte-fonts-footer .vte-btn {
+    flex: 0 0 auto;
+}
+
+.vte-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed !important;
+}
+
+/* ============================================================
+   ПАНЕЛЬ КОДА
+============================================================ */
+.vte-code-panel {
+    position: fixed;
+    left: 16px;
+    bottom: 16px;
+    z-index: 2147483628;
+
+    display: flex;
+    flex-direction: column;
+    width: 620px;
+    height: 420px;
+    min-width: 340px;
+    min-height: 220px;
+
+    font-size: var(--vte-fs);
+    color: var(--vte-fg);
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line);
+    border-radius: var(--vte-radius);
+    box-shadow: var(--vte-shadow);
+    overflow: hidden;
+}
+
+.vte-code-panel.vte-code-collapsed {
+    height: auto !important;
+    min-height: 0;
+}
+
+.vte-code-panel.vte-code-collapsed > *:not(.vte-code-header) {
+    display: none !important;
+}
+
+/* ---- Шапка ---- */
+.vte-code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--vte-gap);
+    flex-shrink: 0;
+    padding: 7px 9px;
+    background: linear-gradient(180deg, var(--vte-bg-raised), var(--vte-bg-soft));
+    border-bottom: 1px solid var(--vte-line);
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+
+.vte-code-header:active {
+    cursor: grabbing;
+}
+
+.vte-code-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--vte-mono) !important;
+    font-size: 11.5px;
+    color: var(--vte-fg-dim);
+}
+
+.vte-code-logo {
+    color: var(--vte-accent);
+    font-size: 11px;
+}
+
+.vte-code-dirty {
+    color: var(--vte-warn);
+    font-size: 13px;
+    line-height: 1;
+}
+
+.vte-code-controls {
+    display: flex;
+    gap: 2px;
+}
+
+.vte-code-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 25px;
+    height: 25px;
+    font-size: 11px;
+    color: var(--vte-fg-mute);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    transition: color var(--vte-t), background var(--vte-t);
+}
+
+.vte-code-btn:hover {
+    color: var(--vte-fg);
+    background: var(--vte-bg-raised);
+    border-color: var(--vte-line);
+}
+
+.vte-code-btn-close:hover {
+    color: #fff;
+    background: var(--vte-danger);
+    border-color: var(--vte-danger);
+}
+
+/* ---- Поиск ---- */
+.vte-code-search {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    padding: 6px 9px;
+    background: var(--vte-bg-soft);
+    border-bottom: 1px solid var(--vte-line-soft);
+}
+
+.vte-code-find-ic {
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+}
+
+.vte-code-find-input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 7px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 11px !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: 4px !important;
+}
+
+.vte-code-find-input:focus {
+    outline: none !important;
+    border-color: var(--vte-accent) !important;
+}
+
+.vte-code-find-count {
+    flex-shrink: 0;
+    min-width: 40px;
+    font-family: var(--vte-mono) !important;
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+    text-align: center;
+}
+
+.vte-code-find-count.vte-code-find-none {
+    color: var(--vte-danger);
+}
+
+/* ---- Тело редактора ---- */
+.vte-code-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    background: var(--vte-bg-inset);
+}
+
+/* Общие метрики текста: должны совпадать у textarea и подсветки */
+.vte-code-gutter,
+.vte-code-highlight,
+.vte-code-input {
+    font-family: var(--vte-mono) !important;
+    font-size: 12px !important;
+    line-height: 18px !important;
+    letter-spacing: 0 !important;
+    tab-size: 4;
+    -moz-tab-size: 4;
+}
+
+.vte-code-gutter {
+    flex-shrink: 0;
+    width: 46px;
+    padding: 8px 0;
+    background: #0c0e10;
+    border-right: 1px solid var(--vte-line-soft);
+    overflow: hidden;
+    user-select: none;
+    text-align: right;
+}
+
+.vte-code-ln {
+    padding: 0 8px 0 4px;
+    color: #4a525c;
+    cursor: pointer;
+    transition: color 100ms;
+}
+
+.vte-code-ln:hover {
+    color: var(--vte-fg-dim);
+}
+
+.vte-code-ln-active {
+    color: var(--vte-fg) !important;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.vte-code-ln-error {
+    color: var(--vte-danger) !important;
+    background: rgba(229, 96, 95, 0.12);
+    font-weight: 600;
+}
+
+/* ---- Слой подсветки + textarea ---- */
+.vte-code-surface {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.vte-code-highlight,
+.vte-code-input {
+    position: absolute;
+    inset: 0;
+    margin: 0 !important;
+    padding: 8px 10px !important;
+    border: none !important;
+    white-space: pre;
+    word-wrap: normal;
+    overflow: auto;
+    background: transparent !important;
+}
+
+.vte-code-highlight {
+    pointer-events: none;
+    color: #c8cdd4;
+    overflow: hidden;
+    z-index: 1;
+}
+
+.vte-code-input {
+    z-index: 2;
+    color: transparent !important;
+    caret-color: #f0f3f6;
+    resize: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    -webkit-text-fill-color: transparent;
+}
+
+.vte-code-input::selection {
+    background: rgba(78, 161, 255, 0.32);
+}
+
+.vte-code-input::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+}
+
+.vte-code-input::-webkit-scrollbar-track {
+    background: #0c0e10;
+}
+
+.vte-code-input::-webkit-scrollbar-thumb {
+    background: #2f353d;
+    border-radius: 5px;
+    border: 2px solid #0c0e10;
+}
+
+.vte-code-input::-webkit-scrollbar-thumb:hover {
+    background: #3d4550;
+}
+
+.vte-code-panel.vte-code-wrap .vte-code-highlight,
+.vte-code-panel.vte-code-wrap .vte-code-input {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* ---- Токены подсветки ---- */
+.vte-tk-comment   { color: #5c6470; font-style: italic; }
+.vte-tk-string    { color: #c39a6b; }
+.vte-tk-atrule    { color: #d38ad3; font-weight: 600; }
+.vte-tk-variable  { color: #c48fe8; }
+.vte-tk-function  { color: #63b8d8; }
+.vte-tk-important { color: #e5605f; font-weight: 600; }
+.vte-tk-color     { color: #e0a458; }
+.vte-tk-number    { color: #d8a35f; }
+.vte-tk-pseudo    { color: #86c46f; }
+.vte-tk-selectorid{ color: #f0c674; font-weight: 600; }
+.vte-tk-class     { color: #8fd07a; }
+.vte-tk-attr      { color: #9ab8d8; }
+.vte-tk-tag       { color: #e08c78; }
+.vte-tk-property  { color: #7fb8e8; }
+.vte-tk-value     { color: #c8cdd4; }
+.vte-tk-keyword   { color: #d38ad3; }
+.vte-tk-punct     { color: #7d848f; }
+.vte-tk-operator  { color: #7d848f; }
+.vte-tk-word      { color: #c8cdd4; }
+
+/* ---- Миникарта ---- */
+.vte-code-minimap {
+    flex-shrink: 0;
+    width: 56px;
+    padding: 8px 4px;
+    background: #0a0c0e;
+    border-left: 1px solid var(--vte-line-soft);
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.vte-mm-row {
+    height: 2px;
+    margin-bottom: 1px;
+    border-radius: 1px;
+    background: #2a2f37;
+    transition: background 100ms;
+}
+
+.vte-mm-comment { background: #3a4048; }
+.vte-mm-at      { background: #7a5a8a; }
+.vte-mm-var     { background: #6b4d84; }
+.vte-mm-sel     { background: #4d6b8a; }
+.vte-mm-decl    { background: #3d4a58; }
+
+.vte-code-minimap:hover .vte-mm-row {
+    opacity: 0.85;
+}
+
+/* ---- Проблемы ---- */
+.vte-code-problems {
+    flex-shrink: 0;
+    max-height: 96px;
+    overflow-y: auto;
+    background: rgba(229, 96, 95, 0.06);
+    border-top: 1px solid rgba(229, 96, 95, 0.25);
+}
+
+.vte-code-problem {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 10px;
+    font-size: 10.5px;
+    color: var(--vte-fg-dim);
+    border-bottom: 1px solid rgba(229, 96, 95, 0.1);
+    cursor: pointer;
+    transition: background var(--vte-t);
+}
+
+.vte-code-problem:hover {
+    background: rgba(229, 96, 95, 0.12);
+    color: var(--vte-fg);
+}
+
+.vte-code-problem-ic {
+    flex-shrink: 0;
+    font-size: 9.5px;
+    color: var(--vte-warn);
+}
+
+.vte-code-problem-line {
+    flex-shrink: 0;
+    font-family: var(--vte-mono) !important;
+    font-size: 9.5px;
+    color: var(--vte-danger);
+}
+
+.vte-code-problem-msg {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---- Статус-бар ---- */
+.vte-code-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 5px 10px;
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+    background: var(--vte-bg-soft);
+    border-top: 1px solid var(--vte-line-soft);
+}
+
+.vte-code-status-item {
+    font-family: var(--vte-mono) !important;
+    white-space: nowrap;
+}
+
+.vte-code-status-spacer {
+    flex: 1;
+}
+
+.vte-code-diag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--vte-ok);
+}
+
+.vte-code-diag.vte-code-diag-bad {
+    color: var(--vte-warn);
+}
+
+.vte-code-flash {
+    color: var(--vte-ok) !important;
+}
+
+/* ---- Ручка изменения размера ---- */
+.vte-code-resize {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    width: 18px;
+    height: 18px;
+    padding: 2px;
+    font-size: 8px;
+    color: var(--vte-fg-mute);
+    cursor: nwse-resize;
+    transform: rotate(-45deg);
+    transform-origin: center;
+    z-index: 5;
+}
+
+/* ============================================================
+   ПАНЕЛЬ НАСТРОЕК В #extensions_settings
+   Здесь наследуем шрифт темы, чтобы блок не выбивался
+============================================================ */
+#vte-settings-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px 4px 4px;
+}
+
+.vte-wide-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+}
+
+.vte-btn-danger {
+    color: #fff !important;
+    background-color: rgba(229, 96, 95, 0.85) !important;
+    border-color: rgba(229, 96, 95, 0.9) !important;
+}
+
+.vte-settings-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.vte-settings-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.vte-settings-row:has(.vte-color-input),
+.vte-settings-row:has(.vte-settings-label) {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.vte-settings-label {
+    font-size: 0.9em;
+    opacity: 0.85;
+}
+
+.vte-settings-hint {
+    padding-left: 22px;
+    font-size: 0.8em;
+    line-height: 1.4;
+    opacity: 0.55;
+}
+
+.vte-color-input {
+    width: 44px;
+    height: 26px;
+    padding: 2px !important;
+    background: transparent !important;
+    border: 1px solid rgba(128, 128, 128, 0.4) !important;
+    border-radius: 5px !important;
+    cursor: pointer;
+}
+
+.vte-color-input::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+.vte-color-input::-webkit-color-swatch {
+    border: none;
+    border-radius: 3px;
+}
+
+.vte-settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.vte-settings-actions .menu_button {
+    flex: 1;
+    min-width: 88px;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    white-space: nowrap;
+}
+
+/* ---- Сводка переменных ---- */
+.vte-settings-vars {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vte-vars-head {
+    font-size: 0.85em;
+    font-weight: 600;
+    opacity: 0.75;
+}
+
+.vte-vars-table {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 6px;
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(128, 128, 128, 0.22);
+    border-radius: 6px;
+}
+
+.vte-vars-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 4px;
+    border-radius: 3px;
+    transition: background 140ms;
+}
+
+.vte-vars-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.vte-vars-swatch {
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    border: 1px solid rgba(128, 128, 128, 0.45);
+    border-radius: 3px;
+    background-image: repeating-conic-gradient(
+        rgba(128, 128, 128, 0.25) 0% 25%, transparent 0% 50%
+    );
+    background-size: 6px 6px;
+}
+
+.vte-vars-swatch-empty {
+    background: rgba(128, 128, 128, 0.12);
+    background-image: none;
+}
+
+.vte-vars-name {
+    flex-shrink: 0;
+    max-width: 42%;
+    font-family: 'JetBrains Mono', 'Consolas', monospace !important;
+    font-size: 0.78em;
+    opacity: 0.9;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vte-vars-value {
+    flex: 1;
+    min-width: 0;
+    font-family: 'JetBrains Mono', 'Consolas', monospace !important;
+    font-size: 0.74em;
+    opacity: 0.55;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vte-vars-uses {
+    flex-shrink: 0;
+    font-size: 0.7em;
+    opacity: 0.45;
+}
+
+.vte-settings-empty {
+    padding: 12px;
+    font-size: 0.85em;
+    line-height: 1.5;
+    text-align: center;
+    opacity: 0.6;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 6px;
+}
+
+.vte-settings-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px;
+    font-size: 0.8em;
+    line-height: 1.5;
+    opacity: 0.65;
+    background: rgba(0, 0, 0, 0.2);
+    border-left: 2px solid rgba(78, 161, 255, 0.55);
+    border-radius: 4px;
+}
+
+.vte-settings-note i {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: rgba(78, 161, 255, 0.85);
+}
+
+/* ============================================================
+   МОБИЛЬНАЯ АДАПТАЦИЯ
+============================================================ */
+@media (max-width: 900px) {
+    .vte-code-panel {
+        width: calc(100vw - 20px);
+        left: 10px;
+        right: 10px;
+    }
+}
+
+@media (max-width: 768px) {
+    /* Инспектор — лист снизу */
+    .vte-panel {
+        left: 0 !important;
+        right: 0 !important;
+        top: auto !important;
+        bottom: 0 !important;
+        width: 100% !important;
+        max-height: 72vh;
+        border-radius: 14px 14px 0 0;
+        border-bottom: none;
+    }
+
+    .vte-header {
+        padding: 11px 12px;
+        cursor: default;
+    }
+
+    /* Полоска-указатель, что панель тянется */
+    .vte-header::before {
+        content: '' !important;
+        display: block !important;
+        position: absolute;
+        left: 50%;
+        top: 4px;
+        width: 36px;
+        height: 3px;
+        margin-left: -18px;
+        background: var(--vte-line-strong);
+        border-radius: 2px;
+    }
+
+    .vte-icon-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 13px;
+    }
+
+    .vte-field {
+        flex-wrap: wrap;
+        min-height: 34px;
+    }
+
+    .vte-field-label {
+        width: 100%;
+        font-size: 11.5px;
+    }
+
+    .vte-tab-label {
+        display: none;
+    }
+
+    .vte-tab {
+        padding: 11px 2px !important;
+    }
+
+    .vte-tab i {
+        font-size: 15px;
+    }
+
+    .vte-range {
+        height: 26px !important;
+    }
+
+    .vte-range::-webkit-slider-thumb {
+        width: 18px;
+        height: 18px;
+        margin-top: -7.5px;
+    }
+
+    .vte-range::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+    }
+
+    .vte-swatch {
+        width: 38px;
+        height: 30px;
+    }
+
+    .vte-box-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 7px;
+    }
+
+    /* Пикер — по центру снизу */
+    .vte-cp {
+        left: 50% !important;
+        top: auto !important;
+        bottom: 12px !important;
+        transform: translateX(-50%);
+        width: min(320px, calc(100vw - 20px));
+        max-height: 80vh;
+        overflow-y: auto;
+    }
+
+    .vte-cp-sat {
+        height: 150px;
+    }
+
+    .vte-cp-hue,
+    .vte-cp-alpha {
+        height: 16px;
+    }
+
+    .vte-cp-thumb {
+        width: 20px;
+        height: 20px;
+        margin: -10px 0 0 -10px;
+    }
+
+    .vte-cp-stop {
+        width: 16px;
+        height: 16px;
+        margin-left: -8px;
+    }
+
+    /* Код — полноэкранно */
+    .vte-code-panel {
+        left: 0 !important;
+        right: 0 !important;
+        top: auto !important;
+        bottom: 0 !important;
+        width: 100% !important;
+        height: 62vh;
+        border-radius: 12px 12px 0 0;
+    }
+
+    .vte-code-minimap {
+        display: none;
+    }
+
+    .vte-code-gutter {
+        width: 38px;
+    }
+
+    .vte-code-gutter,
+    .vte-code-highlight,
+    .vte-code-input {
+        font-size: 11.5px !important;
+        line-height: 17px !important;
+    }
+
+    .vte-code-btn {
+        width: 30px;
+        height: 30px;
+        font-size: 12px;
+    }
+
+    /* Подсказка выбора — компактнее */
+    .vte-pick-hint {
+        gap: 10px;
+        padding: 7px 12px;
+        font-size: 10px;
+        bottom: 10px !important;
+    }
+
+    .vte-pick-hint-row:nth-child(2) {
+        display: none;
+    }
+
+    .vte-fonts-list {
+        max-height: 240px;
+    }
+}
+
+/* Экономим место, когда открыты обе панели на узком экране */
+@media (max-width: 768px) {
+    body.vte-active .vte-panel:not(.vte-collapsed) ~ .vte-code-panel {
+        display: none;
+    }
+}
+
+/* Уважаем системную настройку уменьшенной анимации */
+@media (prefers-reduced-motion: reduce) {
+    #vte-inspector-panel *,
+    #vte-code-panel *,
+    #vte-colorpicker * {
+        transition: none !important;
+    }
+}
+/* ============================================================
+   ИКОНКИ FONT AWESOME ВНУТРИ ПАНЕЛЕЙ
+   Сброс выше ставит на * свой font-family, из-за чего иконки
+   превращаются в квадратики. Возвращаем им их шрифт.
+============================================================ */
+#vte-inspector-panel i,
+#vte-inspector-panel .fa-solid,
+#vte-inspector-panel .fa-regular,
+#vte-code-panel i,
+#vte-code-panel .fa-solid,
+#vte-code-panel .fa-regular,
+#vte-colorpicker i,
+#vte-colorpicker .fa-solid,
+#vte-colorpicker .fa-regular {
+    font-family: 'Font Awesome 6 Free', 'Font Awesome 6 Pro',
+                 'Font Awesome 5 Free', 'FontAwesome' !important;
+    font-style: normal !important;
+    font-variant: normal !important;
+    line-height: 1 !important;
+    -webkit-font-smoothing: antialiased;
+}
+
+#vte-inspector-panel .fa-solid,
+#vte-code-panel .fa-solid,
+#vte-colorpicker .fa-solid {
+    font-weight: 900 !important;
+}
+
+#vte-inspector-panel .fa-regular,
+#vte-code-panel .fa-regular,
+#vte-colorpicker .fa-regular {
+    font-weight: 400 !important;
+}
+
+/* ============================================================
+   РЕЖИМ БЕЗ ПОДСВЕТКИ (большие темы)
+   Слой подсветки отключается, текст показывает сама textarea.
+============================================================ */
+.vte-code-panel.vte-code-plain .vte-code-highlight {
+    display: none !important;
+}
+
+.vte-code-panel.vte-code-plain .vte-code-input {
+    color: #c8cdd4 !important;
+    -webkit-text-fill-color: #c8cdd4 !important;
+}
+
+.vte-code-panel.vte-code-plain .vte-code-minimap {
+    display: none !important;
+}
+
+/* Номера строк авто-блока — синим, чтобы сразу видеть свои правки */
+.vte-code-ln-auto {
+    color: #4ea1ff !important;
+    background: rgba(78, 161, 255, 0.10);
+}
+
+.vte-code-ln-auto.vte-code-ln-active {
+    background: rgba(78, 161, 255, 0.22);
+}
+
+/* Индикатор облегчённого режима в статус-баре */
+.vte-code-lite {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--vte-warn);
+}
