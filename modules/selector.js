@@ -4,6 +4,7 @@
 
 let onElementSelected = null;
 let onHover = null;
+let onStateChange = null;   // сообщает наружу: выбор включён / выключен
 
 let active = false;
 let box = null;              // рамка подсветки
@@ -25,6 +26,7 @@ let lastEvent = null;
 export function init(options = {}) {
     onElementSelected = options.onElementSelected || (() => {});
     onHover = options.onHover || (() => {});
+    onStateChange = options.onStateChange || (() => {});
     if (options.highlightColor) highlightColor = options.highlightColor;
     build();
 }
@@ -53,6 +55,7 @@ export function activate() {
 
     document.body.classList.add('vte-picking');
     showHint(true);
+    onStateChange(true);
 }
 
 export function deactivate() {
@@ -70,11 +73,13 @@ export function deactivate() {
     hide();
     showHint(false);
     hovered = null;
+    onStateChange(false);
 }
 
 export function isActive() {
     return active;
 }
+
 
 /** Подсветить элемент программно (например при выборе через хлебные крошки) */
 export function lock(element) {
