@@ -6,17 +6,49 @@ const MARKER_START = '/* ==== VTE:AUTO START — не редактируйте �
 const MARKER_END   = '/* ==== VTE:AUTO END ==== */';
 
 // Свойства, для которых имеет смысл искать переменную по имени
+// Свойства, для которых имеет смысл искать переменную по имени.
+// Подсказки специально сделаны длинными: короткое 'font' совпадало
+// с --mainFontSize и ломало размеры интерфейса.
 const VAR_NAME_HINTS = {
     'background-color': ['bg', 'background', 'tint', 'fill', 'surface', 'panel'],
-    'color':            ['text', 'fg', 'foreground', 'font-color'],
+    'color':            ['text', 'fg', 'foreground', 'font-color', 'fontcolor', 'bodycolor'],
     'border-color':     ['border', 'outline', 'stroke'],
-    'font-family':      ['font', 'family', 'typeface'],
-    'font-size':        ['font-size', 'size', 'scale'],
+    'font-family':      ['font-family', 'fontfamily', 'fontface', 'font-face', 'typeface', 'family'],
+    'font-size':        ['font-size', 'fontsize', 'mainfontsize', 'fontscale'],
     'border-radius':    ['radius', 'rounded', 'corner'],
-    'box-shadow':       ['shadow'],
+    'box-shadow':       ['boxshadow', 'box-shadow'],
+    'text-shadow':      ['textshadow', 'text-shadow'],
     'opacity':          ['opacity', 'alpha'],
-    'backdrop-filter':  ['blur'],
-    'filter':           ['blur', 'filter'],
+    'backdrop-filter':  ['blurstrength', 'blur'],
+    'filter':           ['blurstrength', 'blur', 'filter'],
+};
+
+// Если имя переменной содержит одно из этих слов — она НЕ подходит
+// для данного свойства, даже если подсказка совпала.
+const VAR_NAME_DENY = {
+    'font-family':      ['size', 'scale', 'weight', 'height', 'spacing', 'color', 'shadow', 'width'],
+    'font-size':        ['family', 'face', 'color', 'weight', 'shadow'],
+    'color':            ['bg', 'background', 'border', 'shadow', 'tint', 'size', 'width', 'radius', 'family'],
+    'background-color': ['text', 'border', 'font', 'size', 'width', 'radius', 'shadow'],
+    'border-color':     ['background', 'text', 'font', 'size', 'width', 'radius', 'shadow', 'tint'],
+    'border-radius':    ['color', 'font', 'blur', 'shadow', 'family'],
+    'box-shadow':       ['color', 'font', 'size', 'width', 'family'],
+    'text-shadow':      ['color', 'font', 'size', 'family'],
+    'opacity':          ['color', 'font', 'size', 'family'],
+    'backdrop-filter':  ['color', 'font', 'size', 'family'],
+    'filter':           ['color', 'font', 'size', 'family'],
+};
+
+// Системные переменные SillyTavern: в них можно писать ТОЛЬКО перечисленные
+// свойства. Любая другая запись сломает вёрстку топбара и иконок.
+const VAR_PROPERTY_LOCK = {
+    '--mainfontsize':      ['font-size'],
+    '--fontscale':         ['font-size'],
+    '--blurstrength':      ['backdrop-filter', 'filter'],
+    '--shadowwidth':       ['text-shadow'],
+    '--topbarblocksize':   ['height', 'min-height'],
+    '--avatar-base-width': ['width'],
+    '--avatar-base-height':['height'],
 };
 
 let state = {
@@ -257,42 +289,53 @@ function stripComments(css) {
 /* ============================================================
    ПОИСК ПОДХОДЯЩЕЙ ПЕРЕМЕННОЙ
 ============================================================ */
-/**
- * Ищет переменную, которую логично изменить вместо создания нового правила.
- * Приоритет:
- *   1. Переменная уже используется в этом свойстве этого селектора
- *   2. Переменная используется в этом свойстве родственного селектора
- *   3. Переменная подходит по имени и типу значения
- */
 export function findVariable(selector, property, currentValue) {
     if (property.startsWith('--')) return { name: property, source: 'direct' };
 
+    const typeOk = valueTypeChecker(property);
+    const known = (name) => state.rootVars.get(name);
+
+    // Переменная годится, если она не заблокирована для этого свойства
+    // и её текущее значение того же типа, что записываемое свойство.
+    const usable = (name, checkNameDeny) => {
+        if (isVarLocked(name, property)) return false;
+        if (checkNameDeny && isVarDenied(name, property)) return false;
+        const v = known(name);
+        if (v != null && !typeOk(v)) return false;
+        return true;
+    };
+
     // 1. Точное совпадение selector + property
     for (const [name, uses] of state.varUsage) {
+        if (!usable(name, false)) continue;
         if (uses.some(u => u.property === property && selectorsMatch(u.selector, selector))) {
-            return { name, value: state.rootVars.get(name), source: 'exact' };
+            return { name, value: known(name), source: 'exact' };
         }
     }
 
-    // 2. Тот же элемент, но правило описано другим селектором (например с !important-дублем)
+    // 2. Тот же элемент, но правило описано другим селектором
     const base = baseToken(selector);
     if (base) {
         for (const [name, uses] of state.varUsage) {
+            if (!usable(name, true)) continue;
             if (uses.some(u => u.property === property && u.selector.includes(base))) {
-                return { name, value: state.rootVars.get(name), source: 'related' };
+                return { name, value: known(name), source: 'related' };
             }
         }
     }
 
-    // 3. По имени и совместимости типа значения
-    const hints = VAR_NAME_HINTS[property] || [property.replace(/^-+/, '')];
-    const typeOk = valueTypeChecker(property);
-    let best = null;
+    // 3. По имени и совместимости типа значения.
+    // Для свойств без подсказок переменные не подбираем вообще —
+    // пишем обычное правило в авто-блок. Так безопаснее.
+    const hints = VAR_NAME_HINTS[property];
+    if (!hints) return null;
 
+    let best = null;
     for (const [name, value] of state.rootVars) {
         const lower = name.toLowerCase();
-        const hit = hints.find(h => lower.includes(h));
-        if (!hit) continue;
+        const hit = hints.find(x => lower.includes(x));
+        if (hit === undefined) continue;
+        if (!usable(name, true)) continue;
         if (!typeOk(value)) continue;
 
         const score = hints.indexOf(hit) * 10
@@ -303,6 +346,19 @@ export function findVariable(selector, property, currentValue) {
     }
 
     return best ? { name: best.name, value: best.value, source: best.source } : null;
+}
+
+function isVarDenied(name, property) {
+    const bad = VAR_NAME_DENY[property];
+    if (!bad) return false;
+    const lower = name.toLowerCase();
+    return bad.some(x => lower.includes(x));
+}
+
+function isVarLocked(name, property) {
+    const allow = VAR_PROPERTY_LOCK[name.toLowerCase()];
+    if (!allow) return false;
+    return !allow.includes(property);
 }
 
 function selectorsMatch(a, b) {
@@ -317,20 +373,52 @@ function baseToken(selector) {
 }
 
 function valueTypeChecker(property) {
-    if (/color$/.test(property) || property === 'color') {
-        return (v) => /^(#|rgba?\(|hsla?\(|[a-z]+$)/i.test(v.trim());
-    }
+    const str = (v) => String(v ?? '').trim();
+
+    const isColor = (v) =>
+        /^(#|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|oklch\(|oklab\(|[a-z]+$)/i.test(str(v));
+
+    const isLength = (v) =>
+        /^-?[\d.]+(px|em|rem|vw|vh|vmin|vmax|%|pt|ch|ex)$/i.test(str(v))
+        || /calc\(/i.test(str(v));
+
+    if (/color$/i.test(property) || property === 'color') return isColor;
+
     if (property === 'font-family') {
-        return (v) => /[a-z]/i.test(v) && !/^\d/.test(v.trim());
+        return (v) => {
+            const s = str(v);
+            if (!s) return false;
+            if (/^-?[\d.]/.test(s)) return false;                    // 15px, 1.2 — это не шрифт
+            if (/calc\(|var\(/i.test(s)) return false;
+            if (/^(#|rgba?\(|hsla?\()/i.test(s)) return false;
+            if (/^(none|unset|inherit|initial|normal|bold)$/i.test(s)) return false;
+            return /[a-z]/i.test(s);
+        };
     }
-    if (/(radius|width|height|size|spacing|indent|top|left|right|bottom)/.test(property)) {
-        return (v) => /^-?[\d.]+(px|em|rem|vw|vh|%)?$/.test(v.trim()) || v.includes('calc(');
+
+    if (property === 'font-size') {
+        return (v) => /^-?[\d.]+(px|em|rem|pt|%)$/i.test(str(v)) || /calc\(/i.test(str(v));
     }
+
+    if (property === 'font-weight') {
+        return (v) => /^(\d{3}|normal|bold|lighter|bolder)$/i.test(str(v));
+    }
+
     if (property === 'box-shadow' || property === 'text-shadow') {
-        return (v) => /px|rgba?\(/.test(v);
+        return (v) => /px/i.test(str(v)) && /(rgba?\(|hsla?\(|#[0-9a-f]{3,8})/i.test(str(v));
     }
+
+    if (property === 'opacity') {
+        return (v) => /^(0|1|0?\.\d+)$/.test(str(v));
+    }
+
+    if (/(radius|width|height|size|spacing|indent|top|left|right|bottom|gap)/i.test(property)) {
+        return isLength;
+    }
+
     return () => true;
 }
+
 
 /* ============================================================
    ЗАПИСЬ ИЗМЕНЕНИЙ
