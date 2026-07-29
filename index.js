@@ -35,6 +35,10 @@ const DEFAULTS = {
     useVariables: true,
     liveApply: true,
     hotkey: true,
+    pickerOnStart: false,           // включать прицел сразу вместе с редактором
+    pickOnce: true,                 // после выбора элемента прицел выключается
+    hotkeyToggle: 'Alt+Shift+KeyE', // включить / выключить редактор
+    hotkeyPick: 'Alt+Shift+KeyS',   // включить / выключить выбор элемента
 };
 
 function cfg() {
@@ -187,7 +191,6 @@ function activate() {
 
     inspector.createPanel();
     selector.setHighlightColor(cfg().highlightColor);
-    selector.activate();
 
     if (cfg().showCode) {
         editor.showPanel();
@@ -196,7 +199,14 @@ function activate() {
 
     updateHistoryButtons();
     updateToggleUI();
-    toast('Редактор включён. Кликните по элементу интерфейса.');
+    updatePickUI();
+
+    // Прицел больше не включается сам: только если это явно разрешено в настройках
+    if (cfg().pickerOnStart) {
+        startPicking();
+    } else {
+        toast(`Редактор включён. Выбор элемента — ${comboLabel(cfg().hotkeyPick)}`);
+    }
 }
 
 function deactivate() {
@@ -211,7 +221,35 @@ function deactivate() {
 
     document.body.classList.remove('vte-active');
     updateToggleUI();
+    updatePickUI();
     toast('Редактор выключен');
+}
+
+/* ---------- Режим выбора элемента: живёт отдельно от редактора ---------- */
+function togglePicking() {
+    selector.isActive() ? stopPicking() : startPicking();
+}
+
+function startPicking() {
+    if (!active) {
+        activate();
+        if (selector.isActive()) return; // pickerOnStart уже включил
+    }
+    if (selector.isActive()) return;
+
+    inspector.createPanel();
+    selector.setHighlightColor(cfg().highlightColor);
+    selector.activate();
+    toast('Выберите элемент. Esc — выйти из режима выбора.');
+}
+
+function stopPicking() {
+    if (!selector.isActive()) return;
+    selector.deactivate();
+}
+
+function isPicking() {
+    return !!selector?.isActive?.();
 }
 
 function clearPreviewStyles() {
@@ -262,6 +300,9 @@ function handleElementSelected(el) {
         return;
     }
     inspector.populateProperties(el, getComputedStyle(el), sel);
+
+    // По умолчанию прицел выключается сразу после выбора, чтобы не мешал работать
+    if (cfg().pickOnce) stopPicking();
 }
 
 let commitTimer = null;
@@ -298,14 +339,19 @@ function handleVarInfoRequest(sel, property) {
 
 function handleFontSelected(payload) {
     let next = generator.addFontImport(customCSS, payload.importUrl);
+
+    // font-family и font-weight пишем ТОЛЬКО обычным правилом.
+    // Через переменные темы это ломает системные расчёты SillyTavern.
     next = generator.updateRule(next, payload.selector, 'font-family', payload.stack, {
-        useVariables: cfg().useVariables,
+        useVariables: false,
     });
+
     if (payload.weight && payload.weight !== 400) {
         next = generator.updateRule(next, payload.selector, 'font-weight', String(payload.weight), {
             useVariables: false,
         });
     }
+
     pushHistory(next);
     writeCSS(next);
     toast(`Шрифт ${payload.family} применён`);
@@ -371,17 +417,30 @@ function toast(text, kind = 'info') {
 ============================================================ */
 function mountWandItem() {
     const menu = document.getElementById('extensionsMenu');
-    if (!menu || document.getElementById('vte-wand')) return;
+    if (!menu) return;
 
-    const item = h('div#vte-wand.list-group-item.flex-container.flexGap5.interactable', {
-        tabIndex: 0,
-        on: { click: toggleEditor },
-    }, [
-        h('div.fa-solid.fa-wand-magic-sparkles.extensionsMenuExtensionButton'),
-        h('span#vte-wand-label', { text: 'Визуальный редактор темы' }),
-    ]);
+    if (!document.getElementById('vte-wand')) {
+        menu.appendChild(h('div#vte-wand.list-group-item.flex-container.flexGap5.interactable', {
+            tabIndex: 0,
+            on: { click: toggleEditor },
+        }, [
+            h('div.fa-solid.fa-wand-magic-sparkles.extensionsMenuExtensionButton'),
+            h('span#vte-wand-label', { text: 'Визуальный редактор темы' }),
+        ]));
+    }
 
-    menu.appendChild(item);
+    if (!document.getElementById('vte-wand-pick')) {
+        menu.appendChild(h('div#vte-wand-pick.list-group-item.flex-container.flexGap5.interactable', {
+            tabIndex: 0,
+            on: { click: togglePicking },
+        }, [
+            h('div.fa-solid.fa-crosshairs.extensionsMenuExtensionButton'),
+            h('span#vte-wand-pick-label', { text: 'Выбрать элемент для правки' }),
+        ]));
+    }
+
+    updateToggleUI();
+    updatePickUI();
 }
 
 function updateToggleUI() {
@@ -400,6 +459,71 @@ function updateToggleUI() {
         );
         btn.classList.toggle('vte-btn-danger', active);
     }
+}
+
+function updatePickUI() {
+    const picking = isPicking();
+
+    const label = document.getElementById('vte-wand-pick-label');
+    if (label) {
+        label.textContent = picking
+            ? 'Выключить выбор элемента'
+            : 'Выбрать элемент для правки';
+    }
+
+    const btn = document.getElementById('vte-settings-pick');
+    if (btn) {
+        btn.textContent = '';
+        btn.append(
+            icon(picking ? 'fa-ban' : 'fa-crosshairs'),
+            h('span', { text: picking ? ' Выключить выбор' : ' Выбрать элемент' })
+        );
+        btn.classList.toggle('vte-btn-danger', picking);
+    }
+}
+/* ============================================================
+   СОЧЕТАНИЯ КЛАВИШ: РАЗБОР И ПОДПИСЬ
+============================================================ */
+const MOD_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
+
+/** Собирает строку вида "Alt+Shift+KeyE" из события клавиатуры */
+function comboFromEvent(e) {
+    if (MOD_KEYS.includes(e.key)) return null;
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Meta');
+    if (!e.code) return null;
+    parts.push(e.code);
+    return parts.join('+');
+}
+
+/** Человеческая подпись: "Alt + Shift + E" */
+function comboLabel(combo) {
+    const raw = String(combo || '').trim();
+    if (!raw) return 'не задано';
+    return raw.split('+').map(part => {
+        if (part.startsWith('Key')) return part.slice(3);
+        if (part.startsWith('Digit')) return part.slice(5);
+        if (part.startsWith('Numpad')) return 'Num ' + part.slice(6);
+        if (part === 'Escape') return 'Esc';
+        if (part === 'Meta') return 'Cmd';
+        if (part === 'Control') return 'Ctrl';
+        return part;
+    }).join(' + ');
+}
+
+function matchCombo(e, combo) {
+    const raw = String(combo || '').trim();
+    if (!raw) return false;
+    const parts = raw.split('+');
+    const code = parts[parts.length - 1];
+    if (e.code !== code) return false;
+    return e.ctrlKey === parts.includes('Ctrl')
+        && e.altKey === parts.includes('Alt')
+        && e.shiftKey === parts.includes('Shift')
+        && e.metaKey === parts.includes('Meta');
 }
 
 /* ============================================================
@@ -435,6 +559,11 @@ function mountSettingsPanel() {
         on: { click: toggleEditor },
     });
 
+    const pickBtn = h('button#vte-settings-pick.menu_button.vte-wide-btn', {
+        type: 'button',
+        on: { click: togglePicking },
+    });
+
     const check = (key, label, hint, onAfter) => {
         const input = h('input', {
             type: 'checkbox',
@@ -462,7 +591,65 @@ function mountSettingsPanel() {
             if (!active) return;
             v ? editor.showPanel() : editor.hidePanel();
         }),
-        check('hotkey', 'Горячая клавиша Alt+Shift+E', null),
+        check('pickerOnStart', 'Включать выбор элемента вместе с редактором',
+            'По умолчанию выключено: редактор открывается, а курсор остаётся обычным'),
+        check('pickOnce', 'Выключать выбор после клика',
+            'Выбрали элемент — прицел сам отпускает интерфейс'),
+        check('hotkey', 'Горячие клавиши включены', null),
+    ]);
+
+    /* ---- Переназначение сочетаний ---- */
+    const hotkeyRow = (key, label, hint) => {
+        const btn = h('button.vte-hotkey-input.menu_button', {
+            type: 'button',
+            title: 'Нажмите, затем введите сочетание. Backspace — очистить, Esc — отмена.',
+            text: comboLabel(cfg()[key]),
+        });
+
+        const reset = () => {
+            btn.classList.remove('vte-capturing');
+            btn.textContent = comboLabel(cfg()[key]);
+        };
+
+        btn.addEventListener('click', () => {
+            btn.classList.add('vte-capturing');
+            btn.textContent = 'нажмите сочетание…';
+            btn.focus();
+        });
+
+        btn.addEventListener('keydown', (e) => {
+            if (!btn.classList.contains('vte-capturing')) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (e.key === 'Escape') { reset(); return; }
+            if (e.key === 'Backspace' || e.key === 'Delete') {
+                cfg()[key] = '';
+                persist();
+                reset();
+                return;
+            }
+            const combo = comboFromEvent(e);
+            if (!combo) return;
+            cfg()[key] = combo;
+            persist();
+            reset();
+            toast(`Сочетание сохранено: ${comboLabel(combo)}`);
+        });
+
+        btn.addEventListener('blur', reset);
+
+        return h('div.vte-settings-row.vte-hotkey-row', {}, [
+            h('label.vte-settings-label', { text: label }),
+            btn,
+            hint ? h('small.vte-settings-hint', { text: hint }) : null,
+        ]);
+    };
+
+    const hotkeys = h('div.vte-settings-options', {}, [
+        h('div.vte-settings-subtitle', { text: 'Горячие клавиши' }),
+        hotkeyRow('hotkeyToggle', 'Редактор темы', 'Открыть или закрыть панели редактора'),
+        hotkeyRow('hotkeyPick', 'Выбор элемента', 'Включить или выключить прицел'),
     ]);
 
     const colorInput = h('input.vte-color-input', {
@@ -528,12 +715,13 @@ function mountSettingsPanel() {
         }),
     ]);
 
-    body.append(toggleBtn, options, colorRow, historyRow, toolsRow, varsBtn, varsBox, hint);
+    body.append(toggleBtn, pickBtn, options, hotkeys, colorRow, historyRow, toolsRow, varsBtn, varsBox, hint);
 
     const drawer = h('div#vte-settings.inline-drawer', {}, [header, body]);
     host.appendChild(drawer);
 
     updateToggleUI();
+    updatePickUI();
     updateHistoryButtons();
 }
 
@@ -602,18 +790,27 @@ function exportCSS() {
 ============================================================ */
 function bindHotkeys() {
     document.addEventListener('keydown', (e) => {
+        // Пока переназначаем клавишу — глобальные сочетания молчат
+        if (document.activeElement?.classList?.contains('vte-capturing')) return;
         if (!cfg().hotkey) return;
 
-        if (e.altKey && e.shiftKey && e.code === 'KeyE') {
+        if (matchCombo(e, cfg().hotkeyToggle)) {
             e.preventDefault();
             toggleEditor();
+            return;
+        }
+        if (matchCombo(e, cfg().hotkeyPick)) {
+            e.preventDefault();
+            togglePicking();
             return;
         }
         if (!active) return;
 
         const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
 
+        // Esc в режиме выбора обрабатывает сам selector: гасит только прицел
         if (e.key === 'Escape' && !inField) {
+            if (isPicking()) return;
             deactivate();
             return;
         }
@@ -630,8 +827,8 @@ function bindHotkeys() {
 function watchDom() {
     let timer = null;
     const isOurs = (n) =>
-        n.nodeType === 1 && (n.id === 'vte-wand' || n.id === 'vte-settings' ||
-            (n.id || '').startsWith('vte-') || (n.className || '').toString().includes('vte-'));
+        n.nodeType === 1 && ((n.id || '').startsWith('vte-') ||
+            (n.className || '').toString().includes('vte-'));
 
     const obs = new MutationObserver((records) => {
         const added = records.flatMap(r => Array.from(r.addedNodes));
@@ -695,6 +892,10 @@ async function boot() {
 
     selector.init({
         onElementSelected: handleElementSelected,
+        onStateChange: (on) => {
+            updatePickUI();
+            if (!on && active) toast('Выбор элемента выключен');
+        },
         highlightColor: cfg().highlightColor,
     });
 
@@ -702,7 +903,7 @@ async function boot() {
         onPropertyChange: handlePropertyChange,
         onRequestVarInfo: handleVarInfoRequest,
         onFontsTabMount: (el) => fonts.mount(el),
-        onPickAgain: () => selector.activate(),
+        onPickAgain: () => startPicking(),
         onUndo: undo,
         onRedo: redo,
         picker,
@@ -734,6 +935,10 @@ async function boot() {
         activate,
         deactivate,
         isActive: () => active,
+        startPicking,
+        stopPicking,
+        togglePicking,
+        isPicking,
         getCSS: readCSS,
         setCSS: (css) => { pushHistory(css); writeCSS(css); },
         undo,
@@ -744,7 +949,9 @@ async function boot() {
 
     console.log('[VTE] Visual Theme Editor готов ✓');
 }
-
+/* ============================================================
+   ЗАПУСК
+============================================================ */
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot, { once: true });
 } else {
