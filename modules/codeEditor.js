@@ -21,6 +21,16 @@ let changeTimer = null;
 let renderTimer = null;
 let plainMode = false;
 
+/* --- Локальная история панели кода --- */
+let undoStack = [];
+let redoStack = [];
+let lastSnapshot = '';
+let snapTimer = null;
+let undoBtn = null;
+let redoBtn = null;
+const HISTORY_MAX = 150;
+const SNAP_DEBOUNCE = 400;
+
 const TAB = '    ';
 const CHANGE_DEBOUNCE = 500;
 
@@ -101,9 +111,17 @@ export function createPanel() {
         h('span#vte-code-dirty.vte-code-dirty', { text: '' }),
     ]);
 
+    undoBtn = iconBtn('fa-rotate-left', 'Отменить (Ctrl+Z)', localUndo);
+    redoBtn = iconBtn('fa-rotate-right', 'Вернуть (Ctrl+Shift+Z)', localRedo);
+    undoBtn.disabled = true;
+    redoBtn.disabled = true;
+
     const controls = h('div.vte-code-controls', {}, [
+        undoBtn,
+        redoBtn,
+        h('span.vte-code-sep'),
         iconBtn('fa-arrow-down', 'К моим правкам (авто-блок)', () => revealAutoBlock({ focus: true })),
-        iconBtn('fa-magnifying-glass', 'Поиск (Ctrl+F)', toggleSearch),
+        iconBtn('fa-magnifying-glass', 'Поиск и замена (Ctrl+F)', toggleSearch),
         iconBtn('fa-indent', 'Форматировать', format),
         iconBtn('fa-text-width', 'Перенос строк', toggleWrap),
         iconBtn('fa-copy', 'Скопировать всё', copyAll),
@@ -212,8 +230,12 @@ export function setContent(css, opts = {}) {
     const pos = keepCursor ? ta.selectionStart : null;
     const scroll = ta.scrollTop;
 
+    // Правка пришла извне (инспектор, смена темы) — тоже шаг истории
+    noteExternalChange(css || '');
+
     currentValue = css || '';
     ta.value = currentValue;
+
 
     if (pos != null) {
         const p = Math.min(pos, currentValue.length);
@@ -277,6 +299,7 @@ function handleInput() {
     currentValue = ta.value;
     scheduleRender();
     markDirty(true);
+    scheduleSnapshot();
 
     clearTimeout(changeTimer);
     changeTimer = setTimeout(() => {
@@ -286,11 +309,32 @@ function handleInput() {
 }
 
 function handleKeydown(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    const mod = e.ctrlKey || e.metaKey;
+
+    // Своя отмена: браузерная не работает, потому что код меняет value напрямую
+    if (mod && (e.code === 'KeyZ' || e.key.toLowerCase() === 'z')) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.shiftKey ? localRedo() : localUndo();
+        return;
+    }
+    if (mod && (e.code === 'KeyY' || e.key.toLowerCase() === 'y')) {
+        e.preventDefault();
+        e.stopPropagation();
+        localRedo();
+        return;
+    }
+    if (mod && (e.code === 'KeyH' || e.key.toLowerCase() === 'h')) {
         e.preventDefault();
         toggleSearch(true);
         return;
     }
+    if (mod && (e.code === 'KeyF' || e.key.toLowerCase() === 'f')) {
+        e.preventDefault();
+        toggleSearch(true);
+        return;
+    }
+
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         clearTimeout(changeTimer);
@@ -707,6 +751,7 @@ function runSearch(direction) {
 ============================================================ */
 function format() {
     if (readOnly) return;
+    flushSnapshot();
     const src = ta.value;
     const out = [];
     let depth = 0;
@@ -768,6 +813,98 @@ function format() {
 
     handleInput();
     flashStatus('Отформатировано');
+}
+/* ============================================================
+   ЛОКАЛЬНАЯ ИСТОРИЯ ПАНЕЛИ КОДА
+============================================================ */
+function scheduleSnapshot() {
+    clearTimeout(snapTimer);
+    snapTimer = setTimeout(flushSnapshot, SNAP_DEBOUNCE);
+}
+
+/** Сохранить предыдущее устойчивое состояние как шаг истории */
+function flushSnapshot() {
+    clearTimeout(snapTimer);
+    if (!ta) return;
+    if (ta.value === lastSnapshot) return;
+
+    if (lastSnapshot !== '') {
+        undoStack.push({ value: lastSnapshot, pos: 0 });
+        if (undoStack.length > HISTORY_MAX) undoStack.shift();
+        redoStack.length = 0;
+    }
+    lastSnapshot = ta.value;
+    updateHistoryBtns();
+}
+
+/** Изменение пришло не из textarea, а извне */
+function noteExternalChange(next) {
+    clearTimeout(snapTimer);
+    if (next === lastSnapshot) return;
+
+    if (lastSnapshot !== '') {
+        undoStack.push({ value: lastSnapshot, pos: ta ? ta.selectionStart : 0 });
+        if (undoStack.length > HISTORY_MAX) undoStack.shift();
+        redoStack.length = 0;
+    }
+    lastSnapshot = next;
+    updateHistoryBtns();
+}
+
+function localUndo() {
+    if (!ta) return;
+    flushSnapshot();
+    if (!undoStack.length) {
+        flashStatus('Отменять больше нечего');
+        return;
+    }
+    redoStack.push({ value: ta.value, pos: ta.selectionStart });
+    applyHistoryEntry(undoStack.pop());
+    flashStatus('Отменено');
+}
+
+function localRedo() {
+    if (!ta) return;
+    if (!redoStack.length) {
+        flashStatus('Возвращать нечего');
+        return;
+    }
+    undoStack.push({ value: ta.value, pos: ta.selectionStart });
+    applyHistoryEntry(redoStack.pop());
+    flashStatus('Возвращено');
+}
+
+function applyHistoryEntry(entry) {
+    const scroll = ta.scrollTop;
+    ta.value = entry.value;
+    currentValue = entry.value;
+    lastSnapshot = entry.value;
+
+    const p = Math.min(entry.pos || 0, entry.value.length);
+    ta.focus();
+    ta.setSelectionRange(p, p);
+    ta.scrollTop = scroll;
+
+    scheduleRender(0);
+    updateCursor();
+    updateHistoryBtns();
+
+    clearTimeout(changeTimer);
+    onCodeChange(currentValue);
+    markDirty(false);
+}
+
+function updateHistoryBtns() {
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+}
+
+/** Сбросить историю: нужно при полной перезагрузке темы */
+export function resetHistory() {
+    undoStack = [];
+    redoStack = [];
+    lastSnapshot = ta ? ta.value : '';
+    updateHistoryBtns();
 }
 
 /* ============================================================
