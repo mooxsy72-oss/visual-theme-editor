@@ -172,6 +172,7 @@ export function createPanel() {
 
     const searchInput = h('textarea#vte-code-find.vte-code-find-input', {
         rows: 1,
+        wrap: 'off',
         spellcheck: false,
         placeholder: 'Найти… (Ctrl+Enter — новая строка)',
         on: {
@@ -182,6 +183,7 @@ export function createPanel() {
 
     const replaceInput = h('textarea#vte-code-replace.vte-code-find-input', {
         rows: 1,
+        wrap: 'off',
         spellcheck: false,
         placeholder: 'Заменить на…',
         on: {
@@ -827,25 +829,42 @@ function replaceTerm() {
     return input ? input.value : '';
 }
 
+/** Экранирует символы, чтобы строку можно было вставить в регулярное выражение */
+function escapeRe(v) {
+    return String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** Собирает все совпадения: [{ start, end }] */
 function collectHits(term) {
     const hits = [];
     if (!term) return hits;
     const hay = ta.value;
 
-    if (searchRegex) {
-        let re;
-        try {
-            re = new RegExp(term, searchCase ? 'gm' : 'gim');
-        } catch {
-            return hits;
-        }
+    const push = (re) => {
         let m;
         while ((m = re.exec(hay)) !== null) {
             if (m[0] === '') { re.lastIndex++; continue; }
             hits.push({ start: m.index, end: m.index + m[0].length });
             if (hits.length > 5000) break;
         }
+    };
+
+    // Запрос из нескольких строк: отступы в начале и конце строк
+    // почти всегда отличаются от исходника, поэтому сравниваем без них
+    if (!searchRegex && /\r?\n/.test(term)) {
+        const lines = term.split(/\r?\n/).map(l => l.trim()).filter(l => l !== '');
+        if (!lines.length) return hits;
+        try {
+            push(new RegExp(
+                lines.map(escapeRe).join('[ \\t]*\\r?\\n[ \\t]*'),
+                searchCase ? 'g' : 'gi'
+            ));
+        } catch {}
+        return hits;
+    }
+
+    if (searchRegex) {
+        try { push(new RegExp(term, searchCase ? 'gm' : 'gim')); } catch {}
         return hits;
     }
 
@@ -861,6 +880,7 @@ function collectHits(term) {
     }
     return hits;
 }
+
 
 function runSearch(direction) {
     const counter = panel.querySelector('#vte-code-find-count');
