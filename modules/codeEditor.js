@@ -25,6 +25,8 @@ let plainMode = false;
 let undoStack = [];
 let redoStack = [];
 let lastSnapshot = '';
+let lastSnapPos = 0;     // где была каретка в момент прошлого снимка
+let caretPos = 0;        // текущая позиция каретки
 let snapTimer = null;
 let undoBtn = null;
 let redoBtn = null;
@@ -226,22 +228,27 @@ export function setContent(css, opts = {}) {
     if (!panel) createPanel();
     if (currentValue === css) return;
 
-    const keepCursor = document.activeElement === ta;
-    const pos = keepCursor ? ta.selectionStart : null;
+    // Позицию храним всегда, а не только когда поле в фокусе:
+    // правки из инспектора приходят, пока фокус на ползунке.
+    const pos = document.activeElement === ta ? ta.selectionStart : caretPos;
     const scroll = ta.scrollTop;
+    const hadFocus = document.activeElement === ta;
 
-    // Правка пришла извне (инспектор, смена темы) — тоже шаг истории
     noteExternalChange(css || '');
 
     currentValue = css || '';
     ta.value = currentValue;
 
+    const p = Math.min(pos || 0, currentValue.length);
+    caretPos = p;
+    lastSnapPos = p;
+    if (hadFocus) ta.setSelectionRange(p, p);
 
-    if (pos != null) {
-        const p = Math.min(pos, currentValue.length);
-        ta.setSelectionRange(p, p);
-    }
     ta.scrollTop = scroll;
+    requestAnimationFrame(() => {
+        ta.scrollTop = scroll;
+        syncScroll();
+    });
 
     scheduleRender(0);
     if (!opts.silent) markDirty(false);
@@ -297,6 +304,7 @@ export function revealAutoBlock(opts = {}) {
 ============================================================ */
 function handleInput() {
     currentValue = ta.value;
+    caretPos = ta.selectionStart;
     scheduleRender();
     markDirty(true);
     scheduleSnapshot();
@@ -829,11 +837,12 @@ function flushSnapshot() {
     if (ta.value === lastSnapshot) return;
 
     if (lastSnapshot !== '') {
-        undoStack.push({ value: lastSnapshot, pos: 0 });
+        undoStack.push({ value: lastSnapshot, pos: lastSnapPos, scroll: ta.scrollTop });
         if (undoStack.length > HISTORY_MAX) undoStack.shift();
         redoStack.length = 0;
     }
     lastSnapshot = ta.value;
+    lastSnapPos = ta.selectionStart;
     updateHistoryBtns();
 }
 
@@ -843,11 +852,12 @@ function noteExternalChange(next) {
     if (next === lastSnapshot) return;
 
     if (lastSnapshot !== '') {
-        undoStack.push({ value: lastSnapshot, pos: ta ? ta.selectionStart : 0 });
+        undoStack.push({ value: lastSnapshot, pos: lastSnapPos, scroll: ta ? ta.scrollTop : 0 });
         if (undoStack.length > HISTORY_MAX) undoStack.shift();
         redoStack.length = 0;
     }
     lastSnapshot = next;
+    lastSnapPos = ta ? Math.min(caretPos, next.length) : 0;
     updateHistoryBtns();
 }
 
@@ -858,7 +868,7 @@ function localUndo() {
         flashStatus('Отменять больше нечего');
         return;
     }
-    redoStack.push({ value: ta.value, pos: ta.selectionStart });
+    redoStack.push({ value: ta.value, pos: ta.selectionStart, scroll: ta.scrollTop });
     applyHistoryEntry(undoStack.pop());
     flashStatus('Отменено');
 }
@@ -869,21 +879,34 @@ function localRedo() {
         flashStatus('Возвращать нечего');
         return;
     }
-    undoStack.push({ value: ta.value, pos: ta.selectionStart });
+    undoStack.push({ value: ta.value, pos: ta.selectionStart, scroll: ta.scrollTop });
     applyHistoryEntry(redoStack.pop());
     flashStatus('Возвращено');
 }
 
 function applyHistoryEntry(entry) {
-    const scroll = ta.scrollTop;
+    const prevScroll = ta.scrollTop;
+
     ta.value = entry.value;
     currentValue = entry.value;
     lastSnapshot = entry.value;
 
     const p = Math.min(entry.pos || 0, entry.value.length);
+    lastSnapPos = p;
+    caretPos = p;
+
     ta.focus();
     ta.setSelectionRange(p, p);
-    ta.scrollTop = scroll;
+
+    // Прокрутку возвращаем дважды: сразу и после пересчёта высоты браузером,
+    // иначе значение сбрасывается и текст прыгает в начало.
+    const wanted = entry.scroll != null ? entry.scroll : prevScroll;
+    ta.scrollTop = wanted;
+    requestAnimationFrame(() => {
+        ta.scrollTop = wanted;
+        ensureCaretVisible();
+        syncScroll();
+    });
 
     scheduleRender(0);
     updateCursor();
@@ -892,6 +915,22 @@ function applyHistoryEntry(entry) {
     clearTimeout(changeTimer);
     onCodeChange(currentValue);
     markDirty(false);
+}
+
+/** Подкрутить вид, только если каретка ушла за границы окна */
+function ensureCaretVisible() {
+    if (!ta) return;
+    const lh = lineHeight();
+    const line = ta.value.slice(0, ta.selectionStart).split('\n').length - 1;
+    const top = line * lh;
+    const viewTop = ta.scrollTop;
+    const viewBottom = viewTop + ta.clientHeight;
+
+    if (top < viewTop + lh) {
+        ta.scrollTop = Math.max(0, top - lh * 2);
+    } else if (top > viewBottom - lh * 2) {
+        ta.scrollTop = top - ta.clientHeight + lh * 3;
+    }
 }
 
 function updateHistoryBtns() {
@@ -954,6 +993,7 @@ function updateStats() {
 }
 
 function updateCursor() {
+    if (ta) caretPos = ta.selectionStart;
     const el = statusEl?.querySelector('#vte-code-pos');
     if (!el) return;
     const upto = ta.value.slice(0, ta.selectionStart);
