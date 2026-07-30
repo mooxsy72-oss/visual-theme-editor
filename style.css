@@ -2059,16 +2059,42 @@ body.vte-picking #vte-colorpicker * {
     background: var(--vte-bg-inset);
 }
 
-/* Общие метрики текста: должны совпадать у textarea и подсветки */
+/* Общие метрики текста: должны совпадать у textarea, подсветки и слоя поиска */
 .vte-code-gutter,
 .vte-code-highlight,
-.vte-code-input {
+.vte-code-input,
+.vte-code-hits {
     font-family: var(--vte-mono) !important;
     font-size: 12px !important;
     line-height: 18px !important;
     letter-spacing: 0 !important;
     tab-size: 4;
     -moz-tab-size: 4;
+}
+
+/* Токены внутри слоёв обязаны наследовать метрики.
+   Общий сброс панели ставит на все элементы var(--vte-font),
+   из-за этого подсветка уезжает относительно текста в textarea. */
+#vte-code-panel .vte-code-highlight *,
+#vte-code-panel .vte-code-hits * {
+    font-family: var(--vte-mono) !important;
+    font-size: inherit !important;
+    line-height: inherit !important;
+    letter-spacing: 0 !important;
+    font-variant-ligatures: none !important;
+}
+/* ---- Слой подсветки совпадений ---- */
+.vte-code-hits {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 8px 10px;
+    overflow: hidden;
+    color: transparent;
+    white-space: pre;
+    word-wrap: normal;
+    pointer-events: none;
+    z-index: 0;
 }
 
 .vte-code-gutter {
@@ -2675,7 +2701,8 @@ body.vte-picking #vte-colorpicker * {
 
     .vte-code-gutter,
     .vte-code-highlight,
-    .vte-code-input {
+    .vte-code-input,
+    .vte-code-hits {
         font-size: 11.5px !important;
         line-height: 17px !important;
     }
