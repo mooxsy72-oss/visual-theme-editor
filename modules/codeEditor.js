@@ -49,6 +49,24 @@ const SEARCH_OVERLAY_LIMIT = 200000;
 const AUTO_START = 'VTE:AUTO START';
 const AUTO_END = 'VTE:AUTO END';
 
+/* --- Запоминаемые настройки панели: масштаб, размер, положение --- */
+const UI_KEY = 'vte-code-ui';
+const FS_MIN = 9;
+const FS_MAX = 30;
+const FS_DEFAULT = 12;
+
+let ui = {
+    fontSize: FS_DEFAULT,
+    wrap: false,
+    collapsed: false,
+    left: null,
+    top: null,
+    width: null,
+    height: null,
+};
+let uiSaveTimer = null;
+
+
 /* --- Состояние поиска и замены --- */
 let searchHits = [];      // [{ start, end }]
 let searchIndex = -1;     // какое совпадение активно
@@ -102,6 +120,81 @@ function iconBtn(faName, title, onClick, extraClass) {
         on: { click: onClick },
     }, [icon(faName)]);
 }
+/* ============================================================
+   ЗАПОМИНАНИЕ НАСТРОЕК ПАНЕЛИ
+============================================================ */
+function loadUi() {
+    try {
+        const raw = localStorage.getItem(UI_KEY);
+        if (raw) Object.assign(ui, JSON.parse(raw) || {});
+    } catch {}
+    const fs = Number(ui.fontSize);
+    ui.fontSize = Number.isFinite(fs) ? Math.max(FS_MIN, Math.min(FS_MAX, fs)) : FS_DEFAULT;
+}
+
+function saveUi() {
+    clearTimeout(uiSaveTimer);
+    uiSaveTimer = setTimeout(() => {
+        try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch {}
+    }, 250);
+}
+
+/** Ставит масштаб текста прямо на панель: это переживает любые темы */
+function applyFontSize() {
+    if (!panel) return;
+    panel.style.setProperty('--vte-code-fs', `${ui.fontSize}px`);
+    panel.style.setProperty('--vte-code-lh', `${Math.round(ui.fontSize * 1.5)}px`);
+
+    const label = panel.querySelector('#vte-code-zoom-val');
+    if (label) label.textContent = `${ui.fontSize}px`;
+
+    scheduleRender(0);
+    scheduleSync();
+}
+
+function setFontSize(next, quiet) {
+    const v = Math.max(FS_MIN, Math.min(FS_MAX, Math.round(next)));
+    if (v === ui.fontSize) return;
+    ui.fontSize = v;
+    applyFontSize();
+    saveUi();
+    if (!quiet) flashStatus(`Шрифт ${v}px`);
+}
+
+/** Восстановить размер и положение. На узких экранах раскладку задаёт CSS. */
+function applyGeometry() {
+    if (!panel || window.innerWidth <= 768) return;
+
+    if (ui.width) panel.style.width = `${Math.max(340, ui.width)}px`;
+    if (ui.height) panel.style.height = `${Math.max(220, ui.height)}px`;
+
+    if (ui.left != null && ui.top != null) {
+        const maxLeft = Math.max(0, window.innerWidth - 140);
+        const maxTop = Math.max(0, window.innerHeight - 60);
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        panel.style.left = `${Math.min(Math.max(0, ui.left), maxLeft)}px`;
+        panel.style.top = `${Math.min(Math.max(0, ui.top), maxTop)}px`;
+    }
+}
+
+function rememberGeometry() {
+    if (!panel || window.innerWidth <= 768) return;
+    const r = panel.getBoundingClientRect();
+    ui.left = Math.round(r.left);
+    ui.top = Math.round(r.top);
+    ui.width = Math.round(r.width);
+    if (!panel.classList.contains('vte-code-collapsed')) {
+        ui.height = Math.round(r.height);
+    }
+    saveUi();
+}
+
+function onWheelZoom(e) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    setFontSize(ui.fontSize + (e.deltaY < 0 ? 1 : -1), true);
+}
 
 /* ============================================================
    ИНИЦИАЛИЗАЦИЯ
@@ -117,6 +210,7 @@ export function createPanel() {
         return panel;
     }
 
+    loadUi();
     panel = h('div#vte-code-panel.vte-code-panel');
 
     const title = h('div.vte-code-title', {}, [
@@ -130,9 +224,21 @@ export function createPanel() {
     undoBtn.disabled = true;
     redoBtn.disabled = true;
 
+    const zoom = h('div.vte-code-zoom', {}, [
+        iconBtn('fa-magnifying-glass-minus', 'Мельче (Ctrl+-)', () => setFontSize(ui.fontSize - 1)),
+        h('span#vte-code-zoom-val.vte-code-zoom-val', {
+            title: 'Сбросить масштаб (Ctrl+0)',
+            text: `${ui.fontSize}px`,
+            on: { click: () => setFontSize(FS_DEFAULT) },
+        }),
+        iconBtn('fa-magnifying-glass-plus', 'Крупнее (Ctrl+=)', () => setFontSize(ui.fontSize + 1)),
+    ]);
+
     const controls = h('div.vte-code-controls', {}, [
         undoBtn,
         redoBtn,
+        h('span.vte-code-sep'),
+        zoom,
         h('span.vte-code-sep'),
         iconBtn('fa-arrow-down', 'К моим правкам (авто-блок)', () => revealAutoBlock({ focus: true })),
         iconBtn('fa-magnifying-glass', 'Поиск и замена (Ctrl+F)', toggleSearch),
@@ -267,6 +373,7 @@ export function createPanel() {
             click: updateCursor,
             keyup: updateCursor,
             select: updateCursor,
+            wheel: onWheelZoom,
         },
     });
 
@@ -303,6 +410,21 @@ export function createPanel() {
     makeDraggable(panel, header);
     makeResizable(panel);
     shield(panel);
+
+    // Возвращаем то, что было в прошлый раз: масштаб, размер, место, перенос строк
+    applyFontSize();
+    applyGeometry();
+
+    if (ui.wrap) {
+        wrapLines = true;
+        panel.classList.add('vte-code-wrap');
+        ta.wrap = 'soft';
+    }
+    if (ui.collapsed) {
+        panel.classList.add('vte-code-collapsed');
+    }
+
+    window.addEventListener('resize', () => applyGeometry());
 
     return panel;
 }
@@ -427,11 +549,22 @@ function handleKeydown(e) {
         localRedo();
         return;
     }
-    if (mod && (e.code === 'KeyH' || e.key.toLowerCase() === 'h')) {
+    if (mod && (e.code === 'Equal' || e.code === 'NumpadAdd' || e.key === '+' || e.key === '=')) {
         e.preventDefault();
-        toggleSearch(true);
+        setFontSize(ui.fontSize + 1);
         return;
     }
+    if (mod && (e.code === 'Minus' || e.code === 'NumpadSubtract' || e.key === '-')) {
+        e.preventDefault();
+        setFontSize(ui.fontSize - 1);
+        return;
+    }
+    if (mod && (e.code === 'Digit0' || e.code === 'Numpad0' || e.key === '0')) {
+        e.preventDefault();
+        setFontSize(FS_DEFAULT);
+        return;
+    }
+
     if (mod && (e.code === 'KeyF' || e.key.toLowerCase() === 'f')) {
         e.preventDefault();
         toggleSearch(true);
@@ -1242,6 +1375,8 @@ function toggleWrap() {
     wrapLines = !wrapLines;
     panel.classList.toggle('vte-code-wrap', wrapLines);
     ta.wrap = wrapLines ? 'soft' : 'off';
+    ui.wrap = wrapLines;
+    saveUi();
     renderSearchOverlay();
     flashStatus(wrapLines ? 'Перенос строк включён' : 'Перенос строк выключен');
     scheduleSync();
@@ -1249,6 +1384,8 @@ function toggleWrap() {
 
 function toggleCollapse() {
     panel.classList.toggle('vte-code-collapsed');
+    ui.collapsed = panel.classList.contains('vte-code-collapsed');
+    saveUi();
 }
 
 function markDirty(v) {
@@ -1336,7 +1473,9 @@ function makeDraggable(box, handle) {
     let sx = 0, sy = 0, ox = 0, oy = 0, active = false;
 
     handle.addEventListener('pointerdown', (e) => {
+        // Кнопки и группу масштаба не считаем захватом за шапку
         if (e.target.closest('.vte-code-btn')) return;
+        if (e.target.closest('.vte-code-zoom')) return;
         active = true;
         const r = box.getBoundingClientRect();
         sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
@@ -1356,7 +1495,12 @@ function makeDraggable(box, handle) {
         box.style.top = `${ny}px`;
     });
 
-    const stop = () => { active = false; box.classList.remove('vte-dragging'); };
+    const stop = () => {
+        if (!active) return;
+        active = false;
+        box.classList.remove('vte-dragging');
+        rememberGeometry();
+    };
     handle.addEventListener('pointerup', stop);
     handle.addEventListener('pointercancel', stop);
 }
@@ -1382,10 +1526,15 @@ function makeResizable(box) {
         scheduleSync();
     });
 
-    const stop = () => { active = false; };
+    const stop = () => {
+        if (!active) return;
+        active = false;
+        rememberGeometry();
+    };
     grip.addEventListener('pointerup', stop);
     grip.addEventListener('pointercancel', stop);
 }
+
 
 function shield(el) {
     ['mousedown', 'touchstart', 'pointerdown', 'click'].forEach(type =>
