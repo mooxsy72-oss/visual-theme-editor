@@ -2005,51 +2005,6 @@ body.vte-picking #vte-colorpicker * {
     border-color: var(--vte-danger);
 }
 
-/* ---- Поиск ---- */
-.vte-code-search {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    flex-shrink: 0;
-    padding: 6px 9px;
-    background: var(--vte-bg-soft);
-    border-bottom: 1px solid var(--vte-line-soft);
-}
-
-.vte-code-find-ic {
-    font-size: 10px;
-    color: var(--vte-fg-mute);
-}
-
-.vte-code-find-input {
-    flex: 1;
-    min-width: 0;
-    padding: 5px 7px !important;
-    font-family: var(--vte-mono) !important;
-    font-size: 11px !important;
-    color: var(--vte-fg) !important;
-    background: var(--vte-bg-inset) !important;
-    border: 1px solid var(--vte-line) !important;
-    border-radius: 4px !important;
-}
-
-.vte-code-find-input:focus {
-    outline: none !important;
-    border-color: var(--vte-accent) !important;
-}
-
-.vte-code-find-count {
-    flex-shrink: 0;
-    min-width: 40px;
-    font-family: var(--vte-mono) !important;
-    font-size: 10px;
-    color: var(--vte-fg-mute);
-    text-align: center;
-}
-
-.vte-code-find-count.vte-code-find-none {
-    color: var(--vte-danger);
-}
 
 /* ---- Тело редактора ---- */
 .vte-code-body {
@@ -2876,4 +2831,120 @@ body.vte-picking #vte-colorpicker * {
     opacity: 0.3;
     cursor: default;
     pointer-events: none;
+}
+/* ============================================================
+   ПОИСК И ЗАМЕНА В ПАНЕЛИ КОДА
+============================================================ */
+.vte-code-search {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 5px;
+    flex-shrink: 0;
+    padding: 7px 9px;
+    background: var(--vte-bg-soft);
+    border-bottom: 1px solid var(--vte-line-soft);
+}
+
+.vte-code-search-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    width: 100%;
+}
+
+.vte-code-find-ic {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 26px;
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+}
+
+/* Поля поиска и замены: многострочные, но без переноса —
+   каждая строка запроса остаётся строкой, поле не раздувается */
+.vte-code-find-input {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 26px;
+    max-height: 116px;
+    padding: 5px 7px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 11px !important;
+    line-height: 1.35 !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: 4px !important;
+    resize: none !important;
+    white-space: pre;
+    overflow-x: auto;
+    overflow-y: auto;
+    transition: border-color var(--vte-t), background var(--vte-t);
+}
+
+.vte-code-find-input:focus {
+    outline: none !important;
+    border-color: var(--vte-accent) !important;
+    background: #101317 !important;
+}
+
+.vte-code-find-count {
+    flex: 0 0 auto;
+    align-self: center;
+    min-width: 50px;
+    font-family: var(--vte-mono) !important;
+    font-size: 10px;
+    color: var(--vte-fg-dim);
+    text-align: center;
+}
+
+.vte-code-find-count.vte-code-find-none {
+    color: var(--vte-danger);
+}
+
+/* Кнопки внутри полоски поиска не должны тянуться */
+.vte-code-search .vte-code-btn {
+    flex: 0 0 auto;
+    height: 26px;
+}
+
+.vte-code-toggle {
+    min-width: 26px;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+}
+
+.vte-code-toggle.active {
+    color: var(--vte-accent);
+    background: var(--vte-accent-soft);
+    border-color: rgba(78, 161, 255, 0.45);
+}
+
+.vte-code-btn-text {
+    width: auto;
+    padding: 0 10px;
+    font-size: 11px !important;
+    white-space: nowrap;
+}
+
+/* ---- Подсветка найденного, как в редакторах кода ---- */
+.vte-code-hit {
+    border-radius: 2px;
+    background: rgba(255, 214, 102, 0.30);
+    box-shadow: 0 0 0 1px rgba(255, 214, 102, 0.55);
+}
+
+.vte-code-hit-current {
+    background: rgba(255, 150, 60, 0.55);
+    box-shadow: 0 0 0 1px rgba(255, 186, 96, 0.95);
+}
+
+.vte-code-panel.vte-code-wrap .vte-code-hits {
+    white-space: pre-wrap;
+    word-wrap: break-word;
 }
