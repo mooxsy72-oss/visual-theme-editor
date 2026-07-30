@@ -289,9 +289,25 @@ function stripComments(css) {
 /* ============================================================
    ПОИСК ПОДХОДЯЩЕЙ ПЕРЕМЕННОЙ
 ============================================================ */
+
+// Селекторы, для которых можно менять глобальные переменные темы.
+// Для всех остальных элементов переменные не трогаем: иначе правка
+// одного сообщения меняет размер шрифта во всём интерфейсе.
+const GLOBAL_SELECTORS = [':root', 'html', 'body', '*', 'html, body', 'body, html'];
+
+function isGlobalSelector(selector) {
+    const parts = String(selector || '')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+    if (!parts.length) return false;
+    return parts.every(p => GLOBAL_SELECTORS.includes(p));
+}
+
 export function findVariable(selector, property, currentValue) {
     if (property.startsWith('--')) return { name: property, source: 'direct' };
 
+    const global = isGlobalSelector(selector);
     const typeOk = valueTypeChecker(property);
     const known = (name) => state.rootVars.get(name);
 
@@ -305,13 +321,26 @@ export function findVariable(selector, property, currentValue) {
         return true;
     };
 
+    // Переменная «принадлежит» выбранному элементу только если ВСЕ места
+    // её использования совпадают с этим селектором. Иначе запись в неё
+    // затронет другие части интерфейса.
+    const usedOnlyHere = (name) => {
+        const uses = state.varUsage.get(name) || [];
+        if (!uses.length) return false;
+        return uses.every(u => selectorsMatch(u.selector, selector));
+    };
+
     // 1. Точное совпадение selector + property
     for (const [name, uses] of state.varUsage) {
         if (!usable(name, false)) continue;
-        if (uses.some(u => u.property === property && selectorsMatch(u.selector, selector))) {
-            return { name, value: known(name), source: 'exact' };
-        }
+        if (!uses.some(u => u.property === property && selectorsMatch(u.selector, selector))) continue;
+        if (!global && !usedOnlyHere(name)) continue;
+        return { name, value: known(name), source: 'exact' };
     }
+
+    // Дальше идут «догадки». Для конкретного элемента они запрещены:
+    // пишем обычное правило в авто-блок — это всегда безопасно.
+    if (!global) return null;
 
     // 2. Тот же элемент, но правило описано другим селектором
     const base = baseToken(selector);
@@ -324,9 +353,7 @@ export function findVariable(selector, property, currentValue) {
         }
     }
 
-    // 3. По имени и совместимости типа значения.
-    // Для свойств без подсказок переменные не подбираем вообще —
-    // пишем обычное правило в авто-блок. Так безопаснее.
+    // 3. По имени и совместимости типа значения
     const hints = VAR_NAME_HINTS[property];
     if (!hints) return null;
 
@@ -347,6 +374,7 @@ export function findVariable(selector, property, currentValue) {
 
     return best ? { name: best.name, value: best.value, source: best.source } : null;
 }
+
 
 function isVarDenied(name, property) {
     const bad = VAR_NAME_DENY[property];
@@ -557,23 +585,43 @@ function escapeRe(v) {
 ============================================================ */
 export function addFontImport(css, importUrl) {
     if (!importUrl) return css;
-    const line = `@import url("${importUrl}");`;
-    if (css.includes(importUrl)) return css;
+    const src = css || '';
+    if (src.includes(importUrl)) return src;
 
-    // @import обязан идти до всех правил
-    const lines = css.split('\n');
+    const line = `@import url("${importUrl}");`;
+
+    // Ищем позицию после всех комментариев, @charset и уже существующих
+    // @import. Разбор идёт по символам, поэтому многострочные комментарии
+    // больше не разрезаются пополам.
+    let i = 0;
     let insertAt = 0;
-    for (let i = 0; i < lines.length; i++) {
-        const t = lines[i].trim();
-        if (t.startsWith('@import') || t.startsWith('/*') || t.startsWith('*') || t === '') {
-            insertAt = i + 1;
+
+    while (i < src.length) {
+        if (/\s/.test(src[i])) { i++; insertAt = i; continue; }
+
+        if (src[i] === '/' && src[i + 1] === '*') {
+            const end = src.indexOf('*/', i + 2);
+            i = end === -1 ? src.length : end + 2;
+            insertAt = i;
             continue;
         }
+
+        if (src[i] === '@' && /^@(charset|import)\b/i.test(src.slice(i, i + 12))) {
+            const end = src.indexOf(';', i);
+            i = end === -1 ? src.length : end + 1;
+            insertAt = i;
+            continue;
+        }
+
         break;
     }
-    lines.splice(insertAt, 0, line);
-    return lines.join('\n');
+
+    const head = src.slice(0, insertAt).replace(/\s*$/, '');
+    const tail = src.slice(insertAt).replace(/^\s*/, '');
+
+    return (head ? head + '\n' : '') + line + '\n' + (tail ? '\n' + tail : '');
 }
+
 
 export function removeFontImport(css, importUrl) {
     return css.split('\n')
