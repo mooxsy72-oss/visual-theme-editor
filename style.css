@@ -2014,17 +2014,45 @@ body.vte-picking #vte-colorpicker * {
     background: var(--vte-bg-inset);
 }
 
+/* Масштаб панели кода. Значения переопределяет JS через inline-переменные. */
+.vte-code-panel {
+    --vte-code-fs: 12px;
+    --vte-code-lh: 18px;
+}
+
 /* Общие метрики текста: должны совпадать у textarea, подсветки и слоя поиска */
 .vte-code-gutter,
 .vte-code-highlight,
 .vte-code-input,
 .vte-code-hits {
     font-family: var(--vte-mono) !important;
-    font-size: 12px !important;
-    line-height: 18px !important;
+    font-size: var(--vte-code-fs) !important;
+    line-height: var(--vte-code-lh) !important;
     letter-spacing: 0 !important;
     tab-size: 4;
     -moz-tab-size: 4;
+}
+
+/* ---- Кнопки масштаба в шапке ---- */
+.vte-code-zoom {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+}
+
+.vte-code-zoom-val {
+    min-width: 36px;
+    font-family: var(--vte-mono) !important;
+    font-size: 10px;
+    color: var(--vte-fg-mute);
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+    transition: color var(--vte-t);
+}
+
+.vte-code-zoom-val:hover {
+    color: var(--vte-fg);
 }
 
 /* Токены внутри слоёв обязаны наследовать метрики.
@@ -2054,7 +2082,8 @@ body.vte-picking #vte-colorpicker * {
 
 .vte-code-gutter {
     flex-shrink: 0;
-    width: 46px;
+    width: calc(var(--vte-code-fs) * 3.8);
+    min-width: 40px;
     padding: 8px 0;
     background: #0c0e10;
     border-right: 1px solid var(--vte-line-soft);
@@ -2654,12 +2683,9 @@ body.vte-picking #vte-colorpicker * {
         width: 38px;
     }
 
-    .vte-code-gutter,
-    .vte-code-highlight,
-    .vte-code-input,
-    .vte-code-hits {
-        font-size: 11.5px !important;
-        line-height: 17px !important;
+    .vte-code-panel {
+        --vte-code-fs: 11.5px;
+        --vte-code-lh: 17px;
     }
 
     .vte-code-btn {
