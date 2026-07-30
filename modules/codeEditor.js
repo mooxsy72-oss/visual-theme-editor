@@ -8,6 +8,7 @@ let onValidate = null;
 let panel = null;
 let ta = null;
 let hl = null;
+let searchLayer = null;
 let gutter = null;
 let statusEl = null;
 let problemsEl = null;
@@ -41,8 +42,19 @@ const HIGHLIGHT_LIMIT = 40000;
 const MINIMAP_LIMIT = 25000;
 const DIAG_LIMIT = 60000;
 
+// Слой подсветки совпадений строится из DOM-узлов,
+// на огромных темах его отключаем, а сам поиск продолжает работать
+const SEARCH_OVERLAY_LIMIT = 200000;
+
 const AUTO_START = 'VTE:AUTO START';
 const AUTO_END = 'VTE:AUTO END';
+
+/* --- Состояние поиска и замены --- */
+let searchHits = [];      // [{ start, end }]
+let searchIndex = -1;     // какое совпадение активно
+let searchCase = false;   // учитывать регистр
+let searchRegex = false;  // режим регулярного выражения
+
 
 /* ============================================================
    МИНИ-ХЕЛПЕР DOM
@@ -133,30 +145,109 @@ export function createPanel() {
 
     const header = h('div#vte-code-header.vte-code-header', {}, [title, controls]);
 
-    /* ---- Поиск ---- */
-    const searchInput = h('input#vte-code-find.vte-code-find-input', {
-        type: 'text',
-        placeholder: 'Найти…',
+    /* ---- Поиск и замена ---- */
+    const fieldKeys = (e, isFind) => {
+        if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            if (isFind) runSearch(e.shiftKey ? -1 : 1);
+            else e.shiftKey ? replaceAll() : replaceCurrent();
+            return;
+        }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            // Ctrl+Enter — перенос строки: так ищем по нескольким строкам
+            e.preventDefault();
+            const el = e.target;
+            const s = el.selectionStart, en = el.selectionEnd;
+            el.value = el.value.slice(0, s) + '\n' + el.value.slice(en);
+            el.setSelectionRange(s + 1, s + 1);
+            autoGrow(el);
+            if (isFind) runSearch(0);
+            return;
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            toggleSearch(false);
+        }
+    };
+
+    const searchInput = h('textarea#vte-code-find.vte-code-find-input', {
+        rows: 1,
         spellcheck: false,
+        placeholder: 'Найти… (Ctrl+Enter — новая строка)',
         on: {
-            input: () => runSearch(0),
-            keydown: (e) => {
-                if (e.key === 'Enter') { e.preventDefault(); runSearch(e.shiftKey ? -1 : 1); }
-                if (e.key === 'Escape') { e.preventDefault(); toggleSearch(false); }
-            },
+            input: (e) => { autoGrow(e.target); runSearch(0); },
+            keydown: (e) => fieldKeys(e, true),
+        },
+    });
+
+    const replaceInput = h('textarea#vte-code-replace.vte-code-find-input', {
+        rows: 1,
+        spellcheck: false,
+        placeholder: 'Заменить на…',
+        on: {
+            input: (e) => autoGrow(e.target),
+            keydown: (e) => fieldKeys(e, false),
         },
     });
 
     const searchCount = h('span#vte-code-find-count.vte-code-find-count', { text: '0/0' });
 
-    const searchBar = h('div#vte-code-search.vte-code-search', { style: 'display:none' }, [
+    const caseBtn = h('button#vte-code-case.vte-code-btn.vte-code-toggle', {
+        type: 'button',
+        title: 'Учитывать регистр',
+        text: 'Aa',
+        on: {
+            click: (e) => {
+                searchCase = !searchCase;
+                e.currentTarget.classList.toggle('active', searchCase);
+                runSearch(0);
+            },
+        },
+    });
+
+    const regexBtn = h('button#vte-code-regex.vte-code-btn.vte-code-toggle', {
+        type: 'button',
+        title: 'Регулярное выражение',
+        text: '.*',
+        on: {
+            click: (e) => {
+                searchRegex = !searchRegex;
+                e.currentTarget.classList.toggle('active', searchRegex);
+                runSearch(0);
+            },
+        },
+    });
+
+    const findRow = h('div.vte-code-search-row', {}, [
         h('span.vte-code-find-ic', {}, [icon('fa-magnifying-glass')]),
         searchInput,
         searchCount,
-        iconBtn('fa-chevron-up', 'Предыдущее', () => runSearch(-1)),
-        iconBtn('fa-chevron-down', 'Следующее', () => runSearch(1)),
-        iconBtn('fa-xmark', 'Закрыть поиск', () => toggleSearch(false)),
+        caseBtn,
+        regexBtn,
+        iconBtn('fa-chevron-up', 'Предыдущее (Shift+Enter)', () => runSearch(-1)),
+        iconBtn('fa-chevron-down', 'Следующее (Enter)', () => runSearch(1)),
+        iconBtn('fa-xmark', 'Закрыть поиск (Esc)', () => toggleSearch(false), 'vte-code-btn-close'),
     ]);
+
+    const replaceRow = h('div.vte-code-search-row', {}, [
+        h('span.vte-code-find-ic', {}, [icon('fa-arrow-right-arrow-left')]),
+        replaceInput,
+        h('button.vte-code-btn.vte-code-btn-text', {
+            type: 'button', title: 'Заменить текущее (Enter)',
+            text: 'Заменить',
+            on: { click: replaceCurrent },
+        }),
+        h('button.vte-code-btn.vte-code-btn-text', {
+            type: 'button', title: 'Заменить все (Shift+Enter)',
+            text: 'Все',
+            on: { click: replaceAll },
+        }),
+    ]);
+
+    const searchBar = h('div#vte-code-search.vte-code-search', { style: 'display:none' }, [
+        findRow, replaceRow,
+    ]);
+
 
     /* ---- Область редактора ---- */
     gutter = h('div#vte-code-gutter.vte-code-gutter');
@@ -177,7 +268,9 @@ export function createPanel() {
         },
     });
 
-    const surface = h('div.vte-code-surface', {}, [hl, ta]);
+    searchLayer = h('div#vte-code-hits.vte-code-hits', { 'aria-hidden': 'true' });
+    const surface = h('div.vte-code-surface', {}, [searchLayer, hl, ta]);
+
 
     minimapEl = h('div#vte-code-minimap.vte-code-minimap', {
         on: { click: jumpFromMinimap },
@@ -472,8 +565,22 @@ function render() {
 
     runDiagnostics();
     updateStats();
+
+    // После правки текста позиции совпадений сдвигаются
+    if (searchHits.length) {
+        searchHits = collectHits(findTerm());
+        if (searchIndex >= searchHits.length) searchIndex = searchHits.length - 1;
+        const counter = statusEl && panel.querySelector('#vte-code-find-count');
+        if (counter) {
+            counter.textContent = searchHits.length
+                ? `${Math.max(0, searchIndex) + 1}/${searchHits.length}`
+                : '0/0';
+        }
+    }
+    renderSearchOverlay();
     scheduleSync();
 }
+
 
 function renderHighlight() {
     hl.textContent = '';
@@ -681,78 +788,234 @@ function highlightErrorLines(lines) {
 }
 
 /* ============================================================
-   ПОИСК
+   ПОИСК И ЗАМЕНА
 ============================================================ */
-let searchHits = [];
-let searchIndex = -1;
+function autoGrow(el) {
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(120, el.scrollHeight)}px`;
+}
 
 function toggleSearch(force) {
     const bar = panel.querySelector('#vte-code-search');
     const show = force === undefined ? bar.style.display === 'none' : !!force;
     bar.style.display = show ? 'flex' : 'none';
+
     if (show) {
         const input = bar.querySelector('#vte-code-find');
         const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
-        if (sel && !sel.includes('\n')) input.value = sel;
+        if (sel) input.value = sel;
+        autoGrow(input);
+        autoGrow(bar.querySelector('#vte-code-replace'));
         input.focus();
         input.select();
         runSearch(0);
     } else {
         searchHits = [];
         searchIndex = -1;
+        renderSearchOverlay();
         ta.focus();
     }
 }
 
-function runSearch(direction) {
-    const input = panel.querySelector('#vte-code-find');
-    const counter = panel.querySelector('#vte-code-find-count');
-    const term = input.value;
+function findTerm() {
+    const input = panel?.querySelector('#vte-code-find');
+    return input ? input.value : '';
+}
 
-    if (!term) {
-        searchHits = [];
-        searchIndex = -1;
-        counter.textContent = '0/0';
-        return;
+function replaceTerm() {
+    const input = panel?.querySelector('#vte-code-replace');
+    return input ? input.value : '';
+}
+
+/** Собирает все совпадения: [{ start, end }] */
+function collectHits(term) {
+    const hits = [];
+    if (!term) return hits;
+    const hay = ta.value;
+
+    if (searchRegex) {
+        let re;
+        try {
+            re = new RegExp(term, searchCase ? 'gm' : 'gim');
+        } catch {
+            return hits;
+        }
+        let m;
+        while ((m = re.exec(hay)) !== null) {
+            if (m[0] === '') { re.lastIndex++; continue; }
+            hits.push({ start: m.index, end: m.index + m[0].length });
+            if (hits.length > 5000) break;
+        }
+        return hits;
     }
 
-    const hay = ta.value.toLowerCase();
-    const needle = term.toLowerCase();
-    searchHits = [];
+    const source = searchCase ? hay : hay.toLowerCase();
+    const needle = searchCase ? term : term.toLowerCase();
     let from = 0;
     while (true) {
-        const idx = hay.indexOf(needle, from);
+        const idx = source.indexOf(needle, from);
         if (idx === -1) break;
-        searchHits.push(idx);
-        from = idx + needle.length;
-        if (searchHits.length > 5000) break;
+        hits.push({ start: idx, end: idx + needle.length });
+        from = idx + Math.max(1, needle.length);
+        if (hits.length > 5000) break;
     }
+    return hits;
+}
+
+function runSearch(direction) {
+    const counter = panel.querySelector('#vte-code-find-count');
+    const term = findTerm();
+
+    searchHits = collectHits(term);
 
     if (!searchHits.length) {
-        counter.textContent = '0/0';
-        counter.classList.add('vte-code-find-none');
+        searchIndex = -1;
+        counter.textContent = term ? '0/0' : '0/0';
+        counter.classList.toggle('vte-code-find-none', !!term);
+        renderSearchOverlay();
         return;
     }
     counter.classList.remove('vte-code-find-none');
 
     if (direction === 0) {
-        searchIndex = searchHits.findIndex(i => i >= ta.selectionStart);
+        const caret = ta.selectionStart;
+        searchIndex = searchHits.findIndex(hh => hh.start >= caret);
         if (searchIndex === -1) searchIndex = 0;
     } else {
         searchIndex = (searchIndex + direction + searchHits.length) % searchHits.length;
     }
 
-    const pos = searchHits[searchIndex];
-    ta.focus();
-    ta.setSelectionRange(pos, pos + term.length);
+    counter.textContent = `${searchIndex + 1}/${searchHits.length}`;
+    focusHit(searchIndex, direction !== 0);
+    renderSearchOverlay();
+}
 
-    const line = ta.value.slice(0, pos).split('\n').length;
+/** Показать совпадение. keepFocus=false — фокус остаётся в поле поиска */
+function focusHit(i, moveCaret) {
+    const hit = searchHits[i];
+    if (!hit) return;
+
+    ta.setSelectionRange(hit.start, hit.end);
+    caretPos = hit.start;
+
+    const line = ta.value.slice(0, hit.start).split('\n').length;
     ta.scrollTop = Math.max(0, (line - 1) * lineHeight() - ta.clientHeight / 2);
+
+    if (moveCaret) {
+        // Выделение в textarea видно только при фокусе, поэтому
+        // возвращаем фокус в поле поиска сразу после прокрутки
+        const input = panel.querySelector('#vte-code-find');
+        requestAnimationFrame(() => input?.focus());
+    }
     scheduleSync();
     updateCursor();
-
-    counter.textContent = `${searchIndex + 1}/${searchHits.length}`;
 }
+
+function replaceCurrent() {
+    if (readOnly) return;
+    if (!searchHits.length || searchIndex < 0) { runSearch(0); return; }
+
+    flushSnapshot();
+
+    const hit = searchHits[searchIndex];
+    let insert = replaceTerm();
+
+    if (searchRegex) {
+        // Поддержка $1, $2 в замене
+        try {
+            const re = new RegExp(findTerm(), searchCase ? '' : 'i');
+            const chunk = ta.value.slice(hit.start, hit.end);
+            insert = chunk.replace(re, replaceTerm());
+        } catch {}
+    }
+
+    ta.value = ta.value.slice(0, hit.start) + insert + ta.value.slice(hit.end);
+    const after = hit.start + insert.length;
+    ta.setSelectionRange(after, after);
+    caretPos = after;
+
+    handleInput();
+    flushSnapshot();
+
+    const keep = searchIndex;
+    runSearch(0);
+    if (searchHits.length) {
+        searchIndex = Math.min(keep, searchHits.length - 1);
+        panel.querySelector('#vte-code-find-count').textContent =
+            `${searchIndex + 1}/${searchHits.length}`;
+        renderSearchOverlay();
+    }
+    flashStatus('Заменено');
+}
+
+function replaceAll() {
+    if (readOnly) return;
+    const term = findTerm();
+    if (!term) return;
+
+    const hits = collectHits(term);
+    if (!hits.length) { flashStatus('Совпадений нет'); return; }
+
+    flushSnapshot();
+
+    const insert = replaceTerm();
+    let out = '';
+    let last = 0;
+
+    for (const hit of hits) {
+        out += ta.value.slice(last, hit.start);
+        if (searchRegex) {
+            try {
+                const re = new RegExp(term, searchCase ? '' : 'i');
+                out += ta.value.slice(hit.start, hit.end).replace(re, insert);
+            } catch {
+                out += insert;
+            }
+        } else {
+            out += insert;
+        }
+        last = hit.end;
+    }
+    out += ta.value.slice(last);
+
+    const scroll = ta.scrollTop;
+    ta.value = out;
+    ta.scrollTop = scroll;
+
+    handleInput();
+    flushSnapshot();
+    runSearch(0);
+    flashStatus(`Заменено: ${hits.length}`);
+}
+
+/** Подсветка всех совпадений слоем под текстом */
+function renderSearchOverlay() {
+    if (!searchLayer) return;
+    searchLayer.textContent = '';
+
+    if (!searchHits.length || ta.value.length > SEARCH_OVERLAY_LIMIT) return;
+
+    const frag = document.createDocumentFragment();
+    let last = 0;
+
+    searchHits.forEach((hit, i) => {
+        if (hit.start > last) {
+            frag.appendChild(document.createTextNode(ta.value.slice(last, hit.start)));
+        }
+        const mark = h('span.vte-code-hit', { text: ta.value.slice(hit.start, hit.end) });
+        if (i === searchIndex) mark.classList.add('vte-code-hit-current');
+        frag.appendChild(mark);
+        last = hit.end;
+    });
+
+    if (last < ta.value.length) {
+        frag.appendChild(document.createTextNode(ta.value.slice(last)));
+    }
+    frag.appendChild(document.createTextNode('\n'));
+    searchLayer.appendChild(frag);
+    syncScroll();
+}
+
 
 /* ============================================================
    ФОРМАТИРОВАНИЕ
@@ -959,6 +1222,7 @@ function toggleWrap() {
     wrapLines = !wrapLines;
     panel.classList.toggle('vte-code-wrap', wrapLines);
     ta.wrap = wrapLines ? 'soft' : 'off';
+    renderSearchOverlay();
     flashStatus(wrapLines ? 'Перенос строк включён' : 'Перенос строк выключен');
     scheduleSync();
 }
@@ -1026,6 +1290,10 @@ function syncScroll() {
     if (!plainMode) {
         hl.scrollTop = ta.scrollTop;
         hl.scrollLeft = ta.scrollLeft;
+    }
+    if (searchLayer) {
+        searchLayer.scrollTop = ta.scrollTop;
+        searchLayer.scrollLeft = ta.scrollLeft;
     }
     gutter.scrollTop = ta.scrollTop;
 
