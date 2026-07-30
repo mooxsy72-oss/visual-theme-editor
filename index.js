@@ -327,8 +327,6 @@ function handlePropertyChange(sel, property, value, opts = {}) {
         if (next === customCSS) return;
         pushHistory(next);
         writeCSS(next);
-        // Прокручиваем панель кода к авто-блоку, фокус не забираем
-        editor?.revealAutoBlock?.({ focus: false });
     }, 260);
 }
 
