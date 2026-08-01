@@ -330,7 +330,7 @@ export function mount(container) {
             ]),
             els.maskWarn,
             h('small.vte-note', {
-                text: 'Силуэт — цвет иконки меняется через поле «Фон» на вкладке «Цвет».',
+                text: 'Силуэт — картинка перекрашивается в выбранный цвет. Это же значение попадёт в background-color.',
             }),
             els.fitRow,
             els.pxRow,
@@ -579,19 +579,26 @@ function readFxFromComputed(cs) {
 
     const v = String(cs.filter || '');
     if (v && v !== 'none') {
-        const pick = (name, fallback) => {
-            const m = v.match(new RegExp(`${name}\\(([\\d.]+)`));
-            return m ? Number(m[1]) : fallback;
+        // Браузер отдаёт то процент, то множитель: grayscale(50%) и
+        // grayscale(0.5) — одно и то же. Раньше множитель переводился
+        // только для brightness/saturate/contrast, поэтому «Ч/б» и
+        // «Оттенок» сбрасывались в ноль.
+        const pick = (name) => {
+            const m = v.match(new RegExp(`${name}\\(\\s*([\\d.]+)(%?)`));
+            if (!m) return null;
+            return { n: Number(m[1]), pct: m[2] === '%' };
         };
-        next.blur = pick('blur', 0);
-        next.hue = pick('hue-rotate', 0);
-        next.grayscale = pick('grayscale', 0);
+        const pct = (raw, fallback) => {
+            if (!raw) return fallback;
+            return Math.round(raw.pct ? raw.n : raw.n * 100);
+        };
 
-        for (const key of ['brightness', 'saturate', 'contrast']) {
-            let n = pick(key, 100);
-            if (n <= 5) n = Math.round(n * 100);   // 0.8 → 80%
-            next[key] = Math.round(n);
-        }
+        next.blur       = pick('blur')?.n ?? 0;
+        next.hue        = pick('hue-rotate')?.n ?? 0;
+        next.grayscale  = pct(pick('grayscale'), 0);
+        next.brightness = pct(pick('brightness'), 100);
+        next.saturate   = pct(pick('saturate'), 100);
+        next.contrast   = pct(pick('contrast'), 100);
     }
 
     fx = next;
@@ -787,23 +794,73 @@ function restoreStash() {
 }
 
 /* ============================================================
-   РЕЖИМ И ЦВЕТ
+   ЦВЕТ СИЛУЭТА
+
+   Поле цвета создаётся по требованию и подставляется сразу под
+   предупреждение о маске. Раньше setMode и setTint обращались к
+   элементам, которых не существовало: контрол не появлялся вообще,
+   а в CSS всё равно уходил жёстко заданный #d1912b.
 ============================================================ */
+function ensureTintRow() {
+    if (els.tintRow && els.tintRow.isConnected) return els.tintRow;
+
+    els.tintSwatch = h('button.vte-swatch', {
+        type: 'button',
+        title: 'Цвет силуэта',
+        style: `background:${tint}`,
+        on: {
+            click: () => {
+                if (!picker) return;
+                picker.open({
+                    anchor: els.tintSwatch,
+                    value: tint,
+                    allowGradient: false,
+                    onChange: (v) => setTint(v),
+                    onCommit: (v) => setTint(v),
+                });
+            },
+        },
+    });
+
+    els.tintHex = h('input.vte-hex', {
+        type: 'text', spellcheck: false, value: tint,
+        title: 'HEX-код цвета силуэта',
+        on: {
+            change: () => {
+                const hx = normalizeHex(els.tintHex.value);
+                if (hx) setTint(hx);
+                else els.tintHex.value = tint;
+            },
+        },
+    });
+
+    els.tintRow = h('div.vte-field', { style: 'display:none' }, [
+        h('label.vte-field-label', { text: 'Цвет силуэта' }),
+        h('div.vte-field-body', {}, [els.tintSwatch, els.tintHex]),
+    ]);
+
+    els.maskWarn.insertAdjacentElement('afterend', els.tintRow);
+    return els.tintRow;
+}
+
 function setMode(next, quiet) {
     mode = next === 'mask' ? 'mask' : 'image';
     if (els.modeSeg) {
         els.modeSeg.querySelectorAll('.vte-seg-btn').forEach(b =>
             b.classList.toggle('active', b.dataset.mode === mode));
     }
-    if (els.tintRow) els.tintRow.style.display = mode === 'mask' ? 'flex' : 'none';
+    if (els.maskWarn) {
+        ensureTintRow().style.display = mode === 'mask' ? 'flex' : 'none';
+    }
     if (!quiet) renderRoleUI();
     renderPreview();
 }
 
 function setTint(v, quiet) {
-    tint = v;
-    if (els.tintSwatch) els.tintSwatch.style.background = v;
-    if (els.tintHex) els.tintHex.value = v;
+    const hx = normalizeHex(v) || v;
+    tint = hx;
+    if (els.tintSwatch) els.tintSwatch.style.background = hx;
+    if (els.tintHex) els.tintHex.value = hx;
     if (!quiet) renderPreview();
 }
 
