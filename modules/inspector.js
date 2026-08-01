@@ -13,6 +13,7 @@ let onPickAgain = null;
 let onUndo = null;
 let onRedo = null;
 let onOpenTemplates = null;
+let onDone = null;
 let picker = null;
 
 let panel = null;
@@ -97,6 +98,7 @@ export function init(options = {}) {
     onUndo = options.onUndo || (() => {});
     onRedo = options.onRedo || (() => {});
     onOpenTemplates = options.onOpenTemplates || null;
+    onDone = options.onDone || null;
     onTextApply = options.onTextApply || null;
     picker = options.picker || null;
 
@@ -305,8 +307,11 @@ export function createPanel() {
     return panel;
 }
 
-
 export function hidePanel() {
+    // «Готово» может быть нажато раньше, чем сработает таймер записи.
+    // Без этого вызова последняя правка оставалась только в предпросмотре
+    // и пропадала при выключении редактора.
+    onDone?.();
     if (panel) panel.style.display = 'none';
     picker?.close?.(false);
 }
@@ -342,6 +347,8 @@ function switchTab(id) {
 export function populateProperties(element, computed, selector, info) {
     if (!panel) createPanel();
     panel.style.display = 'flex';
+    // Выбрали одиночный элемент — режим группы обязан сброситься сам
+    if (groupMode) setGroup(null);
 
     el = element;
     targetInfo = info || null;
@@ -1604,19 +1611,26 @@ function backdropBlurValue() {
 function parseFilter(value) {
     const state = { blur: 0, brightness: 100, saturate: 100, contrast: 100, hue: 0, grayscale: 0 };
     if (!value || value === 'none') return state;
+
     const pick = (name) => {
-        const m = value.match(new RegExp(`${name}\\(([\\d.]+)`));
-        return m ? Number(m[1]) : null;
+        // Процент и множитель — getComputedStyle отдаёт то одно, то другое
+        const m = value.match(new RegExp(`${name}\\(\\s*([\\d.]+)(%?)`));
+        if (!m) return null;
+        return { n: Number(m[1]), pct: m[2] === '%' };
     };
-    state.blur = pick('blur') ?? 0;
-    state.brightness = pick('brightness') ?? 100;
-    state.saturate = pick('saturate') ?? 100;
-    state.contrast = pick('contrast') ?? 100;
-    state.hue = pick('hue-rotate') ?? 0;
-    state.grayscale = pick('grayscale') ?? 0;
-    ['brightness', 'saturate', 'contrast'].forEach(k => {
-        if (state[k] <= 5) state[k] = Math.round(state[k] * 100);
-    });
+
+    const toPercent = (raw, fallback) => {
+        if (!raw) return fallback;
+        return raw.pct ? raw.n : Math.round(raw.n * 100);
+    };
+
+    state.blur       = pick('blur')?.n ?? 0;
+    state.brightness = toPercent(pick('brightness'), 100);
+    state.saturate   = toPercent(pick('saturate'), 100);
+    state.contrast   = toPercent(pick('contrast'), 100);
+    state.grayscale  = toPercent(pick('grayscale'), 0);
+    state.hue        = pick('hue-rotate')?.n ?? 0;
+
     return state;
 }
 
