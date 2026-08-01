@@ -1456,7 +1456,10 @@ function applyHistoryEntry(entry) {
     clearTimeout(changeTimer);
     changeTimer = null;
     appliedValue = currentValue;
-    onCodeChange(currentValue);
+    // fromHistory: снаружи это НЕ новый шаг. Панель уже откатила текст
+    // сама, и глобальная история должна просто подхватить результат,
+    // иначе один Ctrl+Z здесь требовал второго Ctrl+Z снаружи.
+    onCodeChange(currentValue, { fromHistory: true });
     markDirty(false);
 }
 
