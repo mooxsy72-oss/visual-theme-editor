@@ -14,6 +14,7 @@ let gradAngle = 135;
 let swatches = [];           // палитра из переменных темы
 let recent = [];
 let suppress = false;        // не эмитить во время программного обновления
+let allowGrad = true;        // разрешены ли градиенты для текущей цели
 
 const RECENT_MAX = 12;
 
@@ -83,9 +84,10 @@ export function setSwatches(list) {
 export function open(opts = {}) {
     if (!pop) build();
     target = opts;
+    allowGrad = opts.allowGradient !== false;
 
-    parseIncoming(opts.value, opts.allowGradient !== false);
-    setModeTabs(opts.allowGradient !== false);
+    parseIncoming(opts.value, allowGrad);
+    setModeTabs(allowGrad);
     syncUI();
     renderSwatches();
     renderRecent();
@@ -100,15 +102,27 @@ export function open(opts = {}) {
 
 export function close(commit = true) {
     if (!pop || pop.style.display === 'none') return;
-    if (commit && target?.onCommit) {
-        const v = currentValue();
-        target.onCommit(v);
-        pushRecent(v);
-    }
+
+    // Ссылку забираем заранее: обработчик может открыть палитру снова
+    const t = target;
+    const value = currentValue();
+
     pop.style.display = 'none';
     document.removeEventListener('pointerdown', outsideClose, true);
     target = null;
+
+    if (commit) {
+        t?.onCommit?.(value);
+        pushRecent(value);
+        return;
+    }
+
+    // Отмена. В CSS ничего не записано, но слой предпросмотра всё ещё
+    // показывает выбранный цвет, поэтому вызывающая сторона обязана
+    // вернуть исходное значение сама.
+    t?.onCancel?.();
 }
+
 
 export function isOpen() {
     return !!pop && pop.style.display !== 'none';
@@ -346,16 +360,22 @@ function setModeTabs(allowGradient) {
     els.tabs.style.display = allowGradient ? 'flex' : 'none';
 }
 
+/** Две точки градиента от текущего цвета: светлая и притемнённая */
+function stopsFromCurrent() {
+    return [
+        { color: hsvaToRgba(hsv, alpha), pos: 0 },
+        { color: hsvaToRgba({ ...hsv, v: Math.max(0.1, hsv.v * 0.45) }, alpha), pos: 100 },
+    ];
+}
+
 function switchMode(next) {
     if (mode === next) return;
 
-    // Переход solid → градиент: строим две точки из текущего цвета
-    if (mode === 'solid' && next !== 'solid' && stops.length < 2) {
-        const base = hsvaToRgba(hsv, alpha);
-        stops = [
-            { color: base, pos: 0 },
-            { color: hsvaToRgba({ ...hsv, v: Math.max(0.1, hsv.v * 0.45) }, alpha), pos: 100 },
-        ];
+    // solid → градиент: точки строим заново от текущего цвета ВСЕГДА.
+    // Раньше стоял guard `stops.length < 2`, и переключение подсовывало
+    // точки от прошлого элемента — вместо своего цвета вылезал чужой градиент.
+    if (mode === 'solid' && next !== 'solid') {
+        stops = stopsFromCurrent();
         activeStop = 0;
     }
     // Переход градиент → solid: берём цвет активной точки
@@ -366,6 +386,27 @@ function switchMode(next) {
     mode = next;
     syncUI();
     emit();
+}
+
+function parseIncoming(value, allowGradient) {
+    const raw = String(value ?? '').trim();
+
+    if (allowGradient && /gradient\(/i.test(raw)) {
+        const parsed = parseGradient(raw);
+        if (parsed) {
+            mode = parsed.type;
+            gradAngle = parsed.angle;
+            stops = parsed.stops;
+            activeStop = 0;
+            loadColorIntoHsv(stops[0].color);
+            return;
+        }
+    }
+
+    mode = 'solid';
+    loadColorIntoHsv(raw || 'rgba(0,0,0,1)');
+    stops = stopsFromCurrent();
+    activeStop = 0;
 }
 
 /* ============================================================
@@ -454,22 +495,31 @@ function selectStop(i) {
 
 function dragStop(e, i) {
     const rect = els.gradBar.getBoundingClientRect();
+    const ref = stops[i];        // держим сам объект, а не его индекс
+    if (!ref) return;
+
     const move = (ev) => {
         const x = clamp01((ev.clientX - rect.left) / rect.width);
-        stops[i].pos = Math.round(x * 100);
+        ref.pos = Math.round(x * 100);
+        activeStop = Math.max(0, stops.indexOf(ref));
         renderGradStops();
         renderGradPreview();
-        els.stopPos.value = String(stops[i].pos);
-        els.stopPosVal.textContent = `${stops[i].pos}%`;
+        els.stopPos.value = String(ref.pos);
+        els.stopPosVal.textContent = `${ref.pos}%`;
         emit();
     };
+
     const up = () => {
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
         stops.sort((a, b) => a.pos - b.pos);
-        activeStop = stops.findIndex(s => s === stops[i]) >= 0 ? activeStop : 0;
+        // После сортировки индекс меняется. Старый код искал stops[i],
+        // то есть уже другую точку, и выделение перескакивало на чужую —
+        // дальше правка цвета уходила не в ту точку.
+        activeStop = Math.max(0, stops.indexOf(ref));
         syncUI();
     };
+
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
 }
@@ -478,9 +528,12 @@ function onGradBarDown(e) {
     if (e.target !== els.gradBar) return;
     const rect = els.gradBar.getBoundingClientRect();
     const pos = Math.round(clamp01((e.clientX - rect.left) / rect.width) * 100);
-    stops.push({ color: sampleGradientAt(pos), pos });
+
+    const st = { color: sampleGradientAt(pos), pos };
+    stops.push(st);
     stops.sort((a, b) => a.pos - b.pos);
-    activeStop = stops.findIndex(s => s.pos === pos);
+    // Поиск по объекту, а не по pos: у двух точек позиция может совпасть
+    activeStop = Math.max(0, stops.indexOf(st));
     selectStop(activeStop);
     emit();
 }
@@ -489,9 +542,11 @@ function addStop() {
     const pos = stops.length
         ? Math.min(100, Math.round((stops[stops.length - 1].pos + 100) / 2))
         : 50;
-    stops.push({ color: hsvaToRgba(hsv, alpha), pos });
+
+    const st = { color: hsvaToRgba(hsv, alpha), pos };
+    stops.push(st);
     stops.sort((a, b) => a.pos - b.pos);
-    activeStop = stops.findIndex(s => s.pos === pos);
+    activeStop = Math.max(0, stops.indexOf(st));
     syncUI();
     emit();
 }
@@ -556,30 +611,6 @@ function emit() {
     target?.onChange?.(v);
 }
 
-function parseIncoming(value, allowGradient) {
-    const raw = String(value ?? '').trim();
-
-    if (allowGradient && /gradient\(/i.test(raw)) {
-        const parsed = parseGradient(raw);
-        if (parsed) {
-            mode = parsed.type;
-            gradAngle = parsed.angle;
-            stops = parsed.stops;
-            activeStop = 0;
-            loadColorIntoHsv(stops[0].color);
-            return;
-        }
-    }
-
-    mode = 'solid';
-    loadColorIntoHsv(raw || 'rgba(0,0,0,1)');
-    if (!stops.length) {
-        stops = [
-            { color: hsvaToRgba(hsv, alpha), pos: 0 },
-            { color: 'rgba(0, 0, 0, 1)', pos: 100 },
-        ];
-    }
-}
 
 function parseGradient(raw) {
     const isRadial = /radial-gradient/i.test(raw);
@@ -675,15 +706,25 @@ function renderSwatches() {
 
 function renderRecent() {
     els.recent.textContent = '';
-    els.recentBox.style.display = recent.length ? 'flex' : 'none';
-    for (const v of recent) {
+
+    // Для цели без градиентов градиентные плашки не показываем: клик по ним
+    // подставлял linear-gradient() в color или border-color, и правило
+    // молча отбрасывалось браузером.
+    const list = allowGrad
+        ? recent
+        : recent.filter(v => !/gradient\(/i.test(String(v)));
+
+    els.recentBox.style.display = list.length ? 'flex' : 'none';
+
+    for (const v of list) {
         els.recent.appendChild(h('button.vte-cp-swatch', {
             type: 'button',
             style: `background:${v}`,
             title: v,
             on: {
                 click: () => {
-                    parseIncoming(v, true);
+                    parseIncoming(v, allowGrad);
+                    setModeTabs(allowGrad);
                     syncUI();
                     emit();
                 },
@@ -691,6 +732,7 @@ function renderRecent() {
         }));
     }
 }
+
 
 function pushRecent(v) {
     if (!v) return;
