@@ -105,6 +105,7 @@ body.vte-picking * {
     cursor: crosshair !important;
 }
 
+/* Над панелями редактора курсор обычный: прицел там не работает */
 body.vte-picking #vte-inspector-panel,
 body.vte-picking #vte-inspector-panel *,
 body.vte-picking #vte-code-panel,
@@ -112,6 +113,25 @@ body.vte-picking #vte-code-panel *,
 body.vte-picking #vte-colorpicker,
 body.vte-picking #vte-colorpicker * {
     cursor: default !important;
+}
+
+body.vte-picking #vte-inspector-panel button,
+body.vte-picking #vte-inspector-panel select,
+body.vte-picking #vte-inspector-panel label,
+body.vte-picking #vte-code-panel button,
+body.vte-picking #vte-colorpicker button {
+    cursor: pointer !important;
+}
+
+body.vte-picking #vte-inspector-panel input[type='text'],
+body.vte-picking #vte-inspector-panel input[type='number'],
+body.vte-picking #vte-inspector-panel textarea,
+body.vte-picking #vte-code-panel textarea {
+    cursor: text !important;
+}
+
+body.vte-picking #vte-inspector-panel input[type='range'] {
+    cursor: pointer !important;
 }
 
 /* Основная рамка */
@@ -2020,17 +2040,52 @@ body.vte-picking #vte-colorpicker * {
     --vte-code-lh: 18px;
 }
 
-/* Общие метрики текста: должны совпадать у textarea, подсветки и слоя поиска */
-.vte-code-gutter,
-.vte-code-highlight,
-.vte-code-input,
-.vte-code-hits {
+/* ============================================================
+   ОБЩИЕ МЕТРИКИ ТЕКСТА В ПАНЕЛИ КОДА
+
+   Селектор обязан начинаться с #vte-code-panel. Сброс в начале файла
+   (#vte-code-panel *) имеет специфичность 1,0,0 и при равном !important
+   побеждает любое правило на одних классах. Из-за этого textarea получала
+   интерфейсный шрифт, а токены подсветки — моноширинный: слои расходились,
+   и выделение с поиском вставали не на буквы.
+============================================================ */
+#vte-code-panel .vte-code-gutter,
+#vte-code-panel .vte-code-highlight,
+#vte-code-panel .vte-code-input,
+#vte-code-panel .vte-code-hits {
     font-family: var(--vte-mono) !important;
     font-size: var(--vte-code-fs) !important;
     line-height: var(--vte-code-lh) !important;
     letter-spacing: 0 !important;
-    tab-size: 4;
-    -moz-tab-size: 4;
+    word-spacing: 0 !important;
+    font-weight: 400 !important;
+    font-style: normal !important;
+    font-variant-ligatures: none !important;
+    font-kerning: none !important;
+    text-indent: 0 !important;
+    text-transform: none !important;
+    tab-size: 4 !important;
+    -moz-tab-size: 4 !important;
+}
+
+/* Три слоя лежат друг на друге: любое расхождение в padding или рамке
+   сдвигает текст на пиксели и ломает попадание выделения */
+#vte-code-panel .vte-code-highlight,
+#vte-code-panel .vte-code-input,
+#vte-code-panel .vte-code-hits {
+    margin: 0 !important;
+    padding: 8px 10px !important;
+    border: 0 !important;
+    white-space: pre;
+    word-wrap: normal;
+    text-align: left !important;
+}
+
+#vte-code-panel.vte-code-wrap .vte-code-highlight,
+#vte-code-panel.vte-code-wrap .vte-code-input,
+#vte-code-panel.vte-code-wrap .vte-code-hits {
+    white-space: pre-wrap;
+    word-wrap: break-word;
 }
 
 /* ---- Кнопки масштаба в шапке ---- */
@@ -2060,12 +2115,19 @@ body.vte-picking #vte-colorpicker * {
    из-за этого подсветка уезжает относительно текста в textarea. */
 #vte-code-panel .vte-code-highlight *,
 #vte-code-panel .vte-code-hits * {
-    font-family: var(--vte-mono) !important;
+    font-family: inherit !important;
     font-size: inherit !important;
     line-height: inherit !important;
-    letter-spacing: 0 !important;
+    letter-spacing: inherit !important;
+    word-spacing: inherit !important;
+    font-weight: inherit !important;
+    font-style: inherit !important;
     font-variant-ligatures: none !important;
+    font-kerning: none !important;
+    text-indent: 0 !important;
+    vertical-align: baseline !important;
 }
+
 /* ---- Слой подсветки совпадений ---- */
 .vte-code-hits {
     position: absolute;
@@ -2084,7 +2146,10 @@ body.vte-picking #vte-colorpicker * {
     flex-shrink: 0;
     width: calc(var(--vte-code-fs) * 3.8);
     min-width: 40px;
-    padding: 8px 0;
+    /* Нижний запас: без него номера строк не могут прокрутиться на те
+       10-17 px, которые textarea отдала своей горизонтальной полосе,
+       и вся нумерация встаёт на строку ниже текста */
+    padding: 8px 0 48px;
     background: #0c0e10;
     border-right: 1px solid var(--vte-line-soft);
     overflow: hidden;
@@ -2416,12 +2481,19 @@ body.vte-picking #vte-colorpicker * {
 
 .vte-settings-actions .menu_button {
     flex: 1;
-    min-width: 88px;
+    min-width: 72px;
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 4px;
     white-space: nowrap;
+    font-size: 0.75em !important;
+    padding: 4px 6px !important;
+    line-height: 1.2 !important;
+}
+
+.vte-settings-actions .menu_button i {
+    font-size: 0.9em;
 }
 
 /* ---- Сводка переменных ---- */
@@ -2973,4 +3045,848 @@ body.vte-picking #vte-colorpicker * {
 .vte-code-panel.vte-code-wrap .vte-code-hits {
     white-space: pre-wrap;
     word-wrap: break-word;
+}
+
+/* ============================================================
+   ВЫБОР ЦЕЛИ: ЭЛЕМЕНТ ИЛИ ПСЕВДОЭЛЕМЕНТ
+============================================================ */
+.vte-target-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex-shrink: 0;
+    padding: 7px 10px;
+    background: var(--vte-bg-inset);
+    border-bottom: 1px solid var(--vte-line-soft);
+}
+
+.vte-target-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.vte-target-label {
+    flex-shrink: 0;
+    width: 50px;
+    font-size: 10.5px;
+    color: var(--vte-fg-mute);
+    user-select: none;
+}
+
+.vte-pseudo-seg {
+    flex: 1;
+    min-width: 0;
+}
+
+.vte-pseudo-seg .vte-seg-btn {
+    font-family: var(--vte-mono) !important;
+    font-size: 10px !important;
+}
+
+.vte-selector-pick {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px !important;
+}
+.vte-check-locked {
+    opacity: 0.5;
+    cursor: not-allowed !important;
+}
+
+.vte-check-locked input[type='checkbox'] {
+    cursor: not-allowed !important;
+}
+/* ============================================================
+   «ВОТ ТУТ ИЗМЕНИЛОСЬ» — подсветка свежей правки в панели кода
+============================================================ */
+.vte-code-band {
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: rgba(78, 161, 255, 0.14);
+    border-top: 1px solid rgba(78, 161, 255, 0.4);
+    border-bottom: 1px solid rgba(78, 161, 255, 0.4);
+    animation: vte-band-in 2.6s ease-out forwards !important;
+}
+
+@keyframes vte-band-in {
+    0%   { background: rgba(78, 161, 255, 0.34); }
+    18%  { background: rgba(78, 161, 255, 0.24); }
+    100% { background: rgba(78, 161, 255, 0.10); }
+}
+
+.vte-code-ln-touched {
+    color: #9fd0ff !important;
+    background: rgba(78, 161, 255, 0.16);
+    font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vte-code-band { animation: none !important; }
+}
+/* ============================================================
+   ВКЛАДКА ИКОНОК
+============================================================ */
+.vte-icon-tool {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.vte-icon-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    background: var(--vte-bg-soft);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: var(--vte-radius-sm);
+}
+
+.vte-icon-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--vte-fg-dim);
+}
+
+.vte-icon-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    font-size: 9.5px;
+    font-weight: 500;
+    color: var(--vte-accent);
+    background: var(--vte-accent-soft);
+    border: 1px solid rgba(78, 161, 255, 0.3);
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.vte-icon-kind:empty {
+    display: none;
+}
+
+.vte-icon-warn {
+    color: var(--vte-warn);
+}
+
+.vte-icon-source {
+    width: 100%;
+    min-height: 62px;
+    max-height: 180px;
+    padding: 7px 8px !important;
+    font-family: var(--vte-mono) !important;
+    font-size: 10.5px !important;
+    line-height: 1.45 !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: var(--vte-radius-sm) !important;
+    resize: vertical !important;
+    white-space: pre-wrap;
+    word-break: break-all;
+    transition: border-color var(--vte-t);
+}
+
+.vte-icon-source:focus {
+    outline: none !important;
+    border-color: var(--vte-accent) !important;
+    box-shadow: 0 0 0 2px var(--vte-accent-soft) !important;
+}
+
+.vte-icon-source::placeholder {
+    color: var(--vte-fg-mute) !important;
+    opacity: 0.7 !important;
+}
+
+.vte-icon-modeseg {
+    flex: 1;
+}
+
+.vte-icon-preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 96px;
+    font-size: 10.5px;
+    color: var(--vte-fg-mute);
+    text-align: center;
+    border: 1px solid var(--vte-line);
+    border-radius: var(--vte-radius-sm);
+    background-color: transparent;
+    background-image:
+        linear-gradient(45deg, #23272e 25%, transparent 25%),
+        linear-gradient(-45deg, #23272e 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #23272e 75%),
+        linear-gradient(-45deg, transparent 75%, #23272e 75%);
+    background-size: 12px 12px;
+    background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+}
+
+.vte-icon-preview-empty {
+    padding: 0 16px;
+    line-height: 1.5;
+}
+
+.vte-icon-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.vte-icon-actions .vte-btn {
+    flex: 1;
+}
+.vte-var-hint.vte-var-inplace {
+    color: #7fd0a0;
+    border-color: rgba(78, 201, 127, 0.45);
+    background: rgba(78, 201, 127, 0.1);
+}
+/* ==== Иконка: карман для несохранённого ручного ввода ==== */
+.vte-icon-stash {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    padding: 7px 9px;
+    border: 1px solid rgba(255, 186, 74, 0.35);
+    border-radius: 8px;
+    background: rgba(255, 186, 74, 0.1);
+    font-size: 0.82em;
+    line-height: 1.35;
+    animation: vte-stash-in 0.18s ease-out;
+}
+
+@keyframes vte-stash-in {
+    from { opacity: 0; transform: translateY(-3px); }
+    to   { opacity: 1; transform: none; }
+}
+
+.vte-icon-stash-ic {
+    flex: 0 0 auto;
+    color: #ffba4a;
+    font-size: 0.95em;
+}
+
+.vte-icon-stash-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.9;
+}
+
+.vte-icon-stash-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.07);
+    color: inherit;
+    font: inherit;
+    font-size: 0.95em;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.vte-icon-stash-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.vte-icon-stash-close {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    opacity: 0.55;
+    cursor: pointer;
+    transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.vte-icon-stash-close:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.1);
+}
+/* ==== Прицел: оверлеи никогда не должны перехватывать курсор ==== */
+.vte-pick-box,
+.vte-pick-padding,
+.vte-pick-margin,
+.vte-pick-label,
+.vte-pick-size,
+.vte-pick-hint {
+    pointer-events: none !important;
+    user-select: none;
+}
+
+/* Элемент схлопнут в нуль: рамка-метка вместо реальной геометрии */
+.vte-pick-box.vte-pick-ghost {
+    border-radius: 3px;
+    animation: vte-ghost-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes vte-ghost-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.5; }
+}
+/* ============================================================
+   ВКЛАДКА «КАРТИНКА»: ЭФФЕКТЫ СЛОЯ
+============================================================ */
+.vte-icon-fx {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.vte-icon-fx .vte-field-label {
+    width: 96px;
+}
+
+/* Подсказка про слой всегда видна, поэтому она спокойнее «кармана» */
+.vte-icon-block .vte-icon-stash {
+    margin-top: 0;
+    border-color: rgba(78, 161, 255, 0.32);
+    background: rgba(78, 161, 255, 0.08);
+    animation: none;
+    flex-wrap: wrap;
+}
+
+.vte-icon-block .vte-icon-stash .vte-icon-stash-ic {
+    color: var(--vte-accent, #4ea1ff);
+}
+
+.vte-icon-block .vte-icon-stash-text {
+    white-space: normal;
+    line-height: 1.4;
+    flex: 1 1 100%;
+}
+/* ============================================================
+   ПРИЦЕЛ: ЦЕЛЬ ЗАФИКСИРОВАНА ALT+КОЛЕСОМ
+   Рамка перестаёт бегать за курсором, поэтому её надо отличать
+   от обычной подсветки под мышью.
+============================================================ */
+.vte-pick-box.vte-pick-manual {
+    border-style: solid !important;
+    border-width: 2px !important;
+    background: rgba(78, 161, 255, 0.14);
+}
+
+.vte-pick-box.vte-pick-manual::after {
+    content: '' !important;
+    display: block !important;
+    position: absolute;
+    inset: -4px;
+    border: 1px dashed rgba(78, 161, 255, 0.45);
+    border-radius: 4px;
+    pointer-events: none;
+}
+/* ============================================================
+   ИКОНКА ИЗ ШРИФТА: подсказка и предпросмотр глифа
+============================================================ */
+.vte-icon-glyph {
+    margin-top: 0;
+    margin-bottom: 6px;
+    border-color: rgba(196, 143, 232, 0.38);
+    background: rgba(196, 143, 232, 0.09);
+    flex-wrap: wrap;
+    animation: none;
+}
+
+.vte-icon-glyph .vte-icon-stash-ic {
+    color: var(--vte-var, #c48fe8);
+}
+
+.vte-icon-glyph .vte-icon-stash-text {
+    flex: 1 1 100%;
+    white-space: normal;
+    line-height: 1.45;
+}
+
+/* Сам глиф в предпросмотре. Общий сброс панели навязывает всем элементам
+   свой font-family, поэтому шрифт иконки задаётся инлайном с !important. */
+.vte-icon-glyph-sample {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+/* ============================================================
+   ПАНЕЛЬ ШАБЛОНОВ ГРУПП
+============================================================ */
+#vte-templates-panel {
+    /* Те же переменные, что у остальных панелей: панель самостоятельная,
+       а сброс в начале файла её id не перечисляет */
+    --vte-bg:          #14161a;
+    --vte-bg-soft:     #191c21;
+    --vte-bg-raised:   #1e2228;
+    --vte-bg-inset:    #0f1114;
+    --vte-line:        #2a2f37;
+    --vte-line-soft:   #22262c;
+    --vte-line-strong: #363d47;
+    --vte-fg:          #dfe4ea;
+    --vte-fg-dim:      #99a2ad;
+    --vte-fg-mute:     #6b7480;
+    --vte-accent:      #4ea1ff;
+    --vte-accent-soft: rgba(78, 161, 255, 0.14);
+    --vte-ok:          #4ec97f;
+    --vte-warn:        #e0a458;
+    --vte-danger:      #e5605f;
+    --vte-var:         #c48fe8;
+    --vte-radius:      8px;
+    --vte-radius-sm:   5px;
+    --vte-gap:         8px;
+    --vte-pad:         10px;
+    --vte-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --vte-font: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --vte-mono: 'JetBrains Mono', 'Consolas', 'SF Mono', ui-monospace, monospace;
+    --vte-fs: 12px;
+    --vte-t: 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#vte-templates-panel,
+#vte-templates-panel * {
+    box-sizing: border-box !important;
+    font-family: var(--vte-font) !important;
+    animation: none !important;
+    text-transform: none !important;
+    letter-spacing: normal !important;
+    text-shadow: none !important;
+}
+
+#vte-templates-panel button {
+    margin: 0 !important;
+    font-size: var(--vte-fs) !important;
+    line-height: 1.2 !important;
+    cursor: pointer !important;
+    background: none;
+    border: none;
+    color: inherit;
+}
+
+#vte-templates-panel input {
+    margin: 0 !important;
+    min-height: 0 !important;
+    box-shadow: none !important;
+}
+
+/* Иконкам возвращаем их шрифт: сброс выше навязал всем свой */
+#vte-templates-panel i,
+#vte-templates-panel .fa-solid {
+    font-family: 'Font Awesome 6 Free', 'Font Awesome 6 Pro',
+                 'Font Awesome 5 Free', 'FontAwesome' !important;
+    font-weight: 900 !important;
+    font-style: normal !important;
+    line-height: 1 !important;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Прицел над панелью шаблонов не работает — курсор обычный */
+body.vte-picking #vte-templates-panel,
+body.vte-picking #vte-templates-panel * {
+    cursor: default !important;
+}
+
+body.vte-picking #vte-templates-panel button {
+    cursor: pointer !important;
+}
+
+body.vte-picking #vte-templates-panel input {
+    cursor: text !important;
+}
+
+.vte-tpl-panel {
+    top: 64px;
+    left: 16px;
+    right: auto;
+    width: 380px;
+    max-height: calc(100vh - 110px);
+}
+
+.vte-tpl-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: var(--vte-pad);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.vte-tpl-body::-webkit-scrollbar {
+    width: 8px;
+}
+
+.vte-tpl-body::-webkit-scrollbar-track {
+    background: var(--vte-bg-inset);
+}
+
+.vte-tpl-body::-webkit-scrollbar-thumb {
+    background: var(--vte-line-strong);
+    border-radius: 4px;
+    border: 2px solid var(--vte-bg-inset);
+}
+
+/* ---- Создание ---- */
+.vte-tpl-create {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.vte-tpl-create .vte-input {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px !important;
+    font-family: var(--vte-font) !important;
+    font-size: 11.5px !important;
+    color: var(--vte-fg) !important;
+    background: var(--vte-bg-inset) !important;
+    border: 1px solid var(--vte-line) !important;
+    border-radius: var(--vte-radius-sm) !important;
+}
+
+.vte-tpl-create .vte-input:focus {
+    outline: none !important;
+    border-color: var(--vte-accent) !important;
+    box-shadow: 0 0 0 2px var(--vte-accent-soft) !important;
+}
+
+.vte-tpl-create .vte-btn {
+    flex: 0 0 auto;
+}
+
+/* ---- Полоска режима набора ---- */
+.vte-tpl-collect {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(78, 161, 255, 0.1);
+    border: 1px solid rgba(78, 161, 255, 0.4);
+    border-radius: var(--vte-radius-sm);
+}
+
+.vte-tpl-collect-ic {
+    flex: 0 0 auto;
+    color: var(--vte-accent);
+    font-size: 12px;
+}
+
+.vte-tpl-collect-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--vte-fg-dim);
+}
+
+.vte-tpl-collect .vte-btn {
+    flex: 0 0 auto;
+}
+
+/* ---- Список шаблонов ---- */
+.vte-tpl-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.vte-tpl-card {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 9px;
+    background: var(--vte-bg-soft);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: var(--vte-radius-sm);
+    transition: border-color var(--vte-t), background var(--vte-t);
+}
+
+.vte-tpl-card:hover {
+    border-color: var(--vte-line);
+}
+
+.vte-tpl-active {
+    border-color: rgba(78, 161, 255, 0.5);
+    background: rgba(78, 161, 255, 0.06);
+}
+
+.vte-tpl-collecting {
+    border-color: rgba(224, 164, 88, 0.55);
+    background: rgba(224, 164, 88, 0.07);
+}
+
+.vte-tpl-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.vte-tpl-name {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+    padding: 0 !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    color: var(--vte-fg) !important;
+    text-align: left;
+    overflow: hidden;
+}
+
+.vte-tpl-name i {
+    flex: 0 0 auto;
+    font-size: 9px;
+    color: var(--vte-fg-mute);
+}
+
+.vte-tpl-active .vte-tpl-name i {
+    color: var(--vte-accent);
+}
+
+.vte-tpl-name span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vte-tpl-count {
+    flex: 0 0 auto;
+    min-width: 22px;
+    padding: 2px 6px;
+    font-family: var(--vte-mono) !important;
+    font-size: 9.5px;
+    color: var(--vte-fg-dim);
+    text-align: center;
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line);
+    border-radius: 999px;
+}
+
+.vte-tpl-btns {
+    display: flex;
+    gap: 1px;
+    flex: 0 0 auto;
+}
+
+/* ---- Селекторы внутри шаблона ---- */
+.vte-tpl-items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 168px;
+    overflow-y: auto;
+    padding: 5px;
+    background: var(--vte-bg-inset);
+    border: 1px solid var(--vte-line-soft);
+    border-radius: 4px;
+}
+
+.vte-tpl-items::-webkit-scrollbar {
+    width: 7px;
+}
+
+.vte-tpl-items::-webkit-scrollbar-thumb {
+    background: var(--vte-line-strong);
+    border-radius: 4px;
+}
+
+.vte-tpl-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 3px;
+    border-radius: 3px;
+    transition: background var(--vte-t);
+}
+
+.vte-tpl-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.vte-tpl-item-n {
+    flex: 0 0 auto;
+    width: 16px;
+    font-family: var(--vte-mono) !important;
+    font-size: 9px;
+    color: var(--vte-fg-mute);
+    text-align: right;
+}
+
+.vte-tpl-item-sel {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--vte-mono) !important;
+    font-size: 10px;
+    color: var(--vte-accent);
+    background: none;
+    padding: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vte-tpl-item-hits {
+    flex: 0 0 auto;
+    font-family: var(--vte-mono) !important;
+    font-size: 9px;
+    color: var(--vte-fg-mute);
+}
+
+.vte-tpl-item .vte-icon-btn {
+    width: 20px;
+    height: 20px;
+    font-size: 9px;
+}
+
+.vte-tpl-item-empty {
+    padding: 8px 4px;
+    font-size: 10.5px;
+    color: var(--vte-fg-mute);
+    text-align: center;
+}
+
+/* ---- Кнопки шаблона ---- */
+.vte-tpl-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.vte-tpl-actions .vte-btn {
+    flex: 1;
+    padding: 6px 8px !important;
+    font-size: 11px !important;
+}
+
+/* ---- Пустое состояние ---- */
+.vte-tpl-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 26px 18px;
+    text-align: center;
+    color: var(--vte-fg-dim);
+}
+
+.vte-tpl-empty > div {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--vte-fg);
+}
+
+.vte-tpl-empty small {
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--vte-fg-mute);
+}
+
+/* ---- Мобильная раскладка ---- */
+@media (max-width: 768px) {
+    .vte-tpl-panel {
+        left: 0 !important;
+        right: 0 !important;
+        top: auto !important;
+        bottom: 0 !important;
+        width: 100% !important;
+        max-height: 76vh;
+        border-radius: 14px 14px 0 0;
+    }
+
+    .vte-tpl-actions {
+        flex-direction: column;
+    }
+
+    .vte-tpl-items {
+        max-height: 200px;
+    }
+}
+/* ============================================================
+   ПОЛОСКА «ПРАВИМ ГРУППУ» В ПАНЕЛИ СВОЙСТВ
+============================================================ */
+.vte-group-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    background: rgba(78, 161, 255, 0.1);
+    border-bottom: 1px solid rgba(78, 161, 255, 0.4);
+}
+
+.vte-group-ic {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--vte-accent);
+}
+
+.vte-group-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--vte-fg-dim);
+}
+
+.vte-group-exit {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 9px !important;
+    font-size: 10.5px !important;
+    color: var(--vte-fg-dim) !important;
+    background: var(--vte-bg-raised);
+    border: 1px solid var(--vte-line) !important;
+    border-radius: var(--vte-radius-sm);
+    white-space: nowrap;
+    transition: color var(--vte-t), border-color var(--vte-t);
+}
+
+.vte-group-exit:hover {
+    color: var(--vte-fg) !important;
+    border-color: var(--vte-line-strong) !important;
+}
+/* ============================================================
+   ЗАПАС ПРОКРУТКИ В СЛОЯХ ПАНЕЛИ КОДА
+   Пустой блок в конце содержимого. Он ничего не рисует, но даёт
+   слою прокрутиться ровно настолько же, насколько прокручивается
+   textarea со своими полосами. Без него выделение и каретка
+   расходятся с текстом на строку.
+============================================================ */
+#vte-code-panel .vte-code-spacer {
+    display: block;
+    height: 48px;
+    background: none !important;
+    pointer-events: none;
+}
+
+/* Правый запас — на ширину вертикальной полосы прокрутки textarea */
+#vte-code-panel .vte-code-highlight,
+#vte-code-panel .vte-code-hits {
+    padding-right: 58px !important;
 }
