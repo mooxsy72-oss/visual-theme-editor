@@ -438,7 +438,10 @@ function valueTypeChecker(property) {
     }
 
     if (property === 'opacity') {
-        return (v) => /^(0|1|0?\.\d+)$/.test(str(v));
+        // Панель отдаёт значение как (n/100).toFixed(2), то есть «1.00» и «0.00».
+        // Старая проверка /^(0|1|0?\.\d+)$/ отбрасывала «1.00» и проценты,
+        // и подходящая переменная считалась негодной.
+        return (v) => /^(?:0|1|0?\.\d+|1\.0+|\d{1,3}%)$/.test(str(v));
     }
 
     if (/(radius|width|height|size|spacing|indent|top|left|right|bottom|gap)/i.test(property)) {
@@ -447,7 +450,6 @@ function valueTypeChecker(property) {
 
     return () => true;
 }
-
 
 /* ============================================================
    ЗАПИСЬ ИЗМЕНЕНИЙ
@@ -459,9 +461,15 @@ export function updateRule(css, selector, property, value, opts = {}) {
         return removeFromAutoBlock(out, selector);
     }
 
-    if (opts.useVariables !== false) {
+    const empty = value === '' || value === 'unset' || value == null;
+
+    // Пустое значение означает «убрать правку». В переменную темы пустоту
+    // писать нельзя: получалось `--var: ;` или `--var: unset;`, и переменная
+    // умирала сразу во всём интерфейсе. Такие случаи идут в авто-блок,
+    // где upsertAutoBlock просто удаляет строку.
+    if (opts.useVariables !== false && !empty) {
         const found = findVariable(selector, property, value);
-        if (found?.name) {
+        if (found?.name && !isInlineVar(found.name)) {
             const updated = setRootVariable(out, found.name, value);
             if (updated !== out) {
                 state.rootVars.set(found.name, value);
@@ -478,6 +486,22 @@ export function updateRule(css, selector, property, value, opts = {}) {
     }
 
     return setDeclaration(out, selector, property, value);
+}
+
+/**
+ * SillyTavern задаёт часть переменных темы прямо в атрибуте style у <html>
+ * через documentElement.style.setProperty. Инлайновый стиль сильнее любого
+ * правила :root в таблице стилей, поэтому наша запись в такую переменную
+ * видна только в слое предпросмотра и пропадает вместе с ним.
+ * Такие переменные не трогаем — пишем обычное правило в авто-блок.
+ */
+function isInlineVar(name) {
+    const clean = name.startsWith('--') ? name : `--${name}`;
+    try {
+        return document.documentElement.style.getPropertyValue(clean).trim() !== '';
+    } catch {
+        return false;
+    }
 }
 
 /* ============================================================
@@ -561,12 +585,24 @@ export function setRootVariable(css, name, value) {
     const clean = name.startsWith('--') ? name : `--${name}`;
     const re = new RegExp(
         `(:root[^{}]*\\{[^}]*?)(\\s*${escapeRe(clean)}\\s*:)([^;}]*)(;?)`,
-        'i'
+        'gi'
     );
 
-    if (re.test(css)) {
-        return css.replace(re, (_all, head, prop, _old, semi) =>
-            `${head}${prop} ${value}${semi || ';'}`);
+    // В CSS побеждает ПОСЛЕДНЕЕ объявление. Раньше правился первый найденный
+    // :root, а второй продолжал перекрывать его — правка выглядела так, будто
+    // не сработала вообще. Темы с несколькими секциями :root ломались об это.
+    let last = null;
+    let m;
+    while ((m = re.exec(css)) !== null) {
+        last = m;
+        if (m.index === re.lastIndex) re.lastIndex++;
+    }
+
+    if (last) {
+        const replacement = `${last[1]}${last[2]} ${value}${last[4] || ';'}`;
+        return css.slice(0, last.index)
+            + replacement
+            + css.slice(last.index + last[0].length);
     }
 
     // Переменной нет — добавляем в авто-блок
