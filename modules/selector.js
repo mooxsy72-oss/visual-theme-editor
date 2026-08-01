@@ -608,30 +608,35 @@ function isPickable(node) {
     }
 }
 
-/** Элементы самого редактора и знакомых оверлеев выбирать нельзя */
+// Классы-маркеры состояния на <body>: vte-active и vte-picking.
+// Они НЕ означают «это часть редактора», поэтому исключены из проверки.
+const OWN_MARKER = /(?:^|\s)vte-(?!active(?:\s|$)|picking(?:\s|$))/;
+
+/**
+ * Элементы самого редактора и знакомых оверлеев выбирать нельзя.
+ *
+ * Подъём по предкам обязательно останавливается на body: иначе класс
+ * vte-active, который редактор вешает на body при включении, делал
+ * «нашим» вообще всё на странице, и прицел перестал выбирать элементы.
+ */
 function isOurs(node) {
     if (!node || node.nodeType !== 1) return false;
-    if (typeof node.closest !== 'function') return false;
 
-    const ownSelectors = [
-        '#vte-inspector-panel',
-        '#vte-code-panel',
-        '#vte-colorpicker',
-        '#vte-settings',
-        '.vte-pick-box',
-        '.vte-pick-label',
-        '.vte-pick-size',
-        '.vte-pick-hint',
-        '.vte-pick-padding',
-        '.vte-pick-margin',
-    ];
+    let cur = node;
+    while (cur && cur.nodeType === 1) {
+        if (cur === document.body || cur === document.documentElement) return false;
 
-    for (const s of ownSelectors) {
-        if (node.closest(s)) return true;
+        if (String(cur.id || '').startsWith('vte-')) return true;
+        if (cur.id === 'toast-container') return true;
+
+        // className у SVG — объект, поэтому приводим аккуратно
+        const cls = typeof cur.className === 'string'
+            ? cur.className
+            : (cur.className?.baseVal || '');
+        if (OWN_MARKER.test(' ' + cls)) return true;
+
+        cur = cur.parentElement;
     }
-    // toastr-уведомления и сам класс-маркер
-    if (node.closest('#toast-container')) return true;
-    if ((node.className || '').toString().includes('vte-')) return true;
     return false;
 }
 
