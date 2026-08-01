@@ -279,11 +279,15 @@ function startPicking() {
     }
     if (selector.isActive()) return;
 
-    inspector.createPanel();
+    // Во время набора шаблона панель свойств не нужна: она открылась бы
+    // пустой и накрыла собой панель шаблонов
+    if (!templates?.isCollecting?.()) inspector.createPanel();
+
     selector.setHighlightColor(cfg().highlightColor);
     selector.activate();
     toast('Выберите элемент. Esc — выйти из режима выбора.');
 }
+
 
 function stopPicking() {
     if (!selector.isActive()) return;
@@ -610,8 +614,15 @@ function flushCommits() {
     commitTimer = null;
     if (!pendingCommits.size) return;
 
+    // Очередь снимаем и очищаем ДО flushPending: внутри него сработает
+    // handleCodeChange, а он вызывает dropPendingCommits и иначе стёр бы
+    // правку ползунка, которую мы прямо сейчас собираемся записать.
     const queue = new Map(pendingCommits);
     pendingCommits.clear();
+
+    // Человек мог печатать в панели кода — его текст ещё не применён.
+    // Если не применить сначала его, следующая запись затрёт набранное.
+    try { editor.flushPending?.(); } catch {}
 
     let next = customCSS;
     let lastSel = null;
@@ -634,6 +645,7 @@ function flushCommits() {
     writeCSS(next);
     if (lastSel) revealInEditor(lastSel, lastProp);
 }
+
 
 /** Выбросить очередь без записи — нужно для undo/redo и правки кода вручную */
 function dropPendingCommits() {
@@ -1220,19 +1232,24 @@ function bindHotkeys() {
         if (document.activeElement?.classList?.contains('vte-capturing')) return;
         if (!cfg().hotkey) return;
 
-        if (matchCombo(e, cfg().hotkeyToggle)) {
+        const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
+
+        // Сочетание без модификаторов внутри поля ввода — это обычный набор
+        // текста, а не команда. Раньше проверки не было вообще, и любая
+        // простая клавиша, назначенная на редактор, срабатывала при печати.
+        const plain = (combo) => !/Ctrl|Alt|Meta/.test(String(combo || ''));
+
+        if (matchCombo(e, cfg().hotkeyToggle) && !(inField && plain(cfg().hotkeyToggle))) {
             e.preventDefault();
             toggleEditor();
             return;
         }
-        if (matchCombo(e, cfg().hotkeyPick)) {
+        if (matchCombo(e, cfg().hotkeyPick) && !(inField && plain(cfg().hotkeyPick))) {
             e.preventDefault();
             togglePicking();
             return;
         }
         if (!active) return;
-
-        const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
 
         // Esc в режиме выбора обрабатывает сам selector: гасит только прицел
         if (e.key === 'Escape' && !inField) {
