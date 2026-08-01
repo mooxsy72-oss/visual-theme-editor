@@ -153,10 +153,9 @@ function pushHistory(css) {
 function undo() {
     if (history.length < 2) return;
 
-    // Правка после ползунка пишется с задержкой 260 мс. Если не снять
-    // этот таймер, он сработает уже после отмены и вернёт всё назад.
-    clearTimeout(commitTimer);
-    commitTimer = null;
+    // Отложенные правки надо выбросить, иначе они сработают уже после
+    // отмены и вернут всё назад.
+    dropPendingCommits();
 
     future.push(history.pop());
     const css = history[history.length - 1];
@@ -174,8 +173,7 @@ function undo() {
 function redo() {
     if (!future.length) return;
 
-    clearTimeout(commitTimer);
-    commitTimer = null;
+    dropPendingCommits();
 
     const css = future.pop();
     history.push(css);
@@ -249,6 +247,11 @@ function deactivate() {
     if (!active) return;
     active = false;
 
+    // Сначала дописываем всё, что ещё висит в очереди, и только потом
+    // снимаем слой предпросмотра. Иначе значения, не успевшие попасть
+    // в CSS, просто исчезали с экрана.
+    flushCommits();
+
     selector.deactivate();
     inspector.hidePanel();
     editor.hidePanel();
@@ -262,6 +265,7 @@ function deactivate() {
     updatePickUI();
     toast('Редактор выключен');
 }
+
 
 /* ---------- Режим выбора элемента: живёт отдельно от редактора ---------- */
 function togglePicking() {
@@ -283,6 +287,7 @@ function startPicking() {
 
 function stopPicking() {
     if (!selector.isActive()) return;
+    flushCommits();
     selector.deactivate();
 }
 
@@ -575,8 +580,67 @@ function toggleTemplates() {
     templates.togglePanel();
 }
 
+/* ============================================================
+   ОТЛОЖЕННАЯ ЗАПИСЬ В CSS
+
+   Раньше здесь был один таймер на всё расширение. Если панель успевала
+   отправить два свойства подряд (backdrop-filter + -webkit-backdrop-filter,
+   четыре стороны padding, ширина + высота иконки), clearTimeout убивал
+   предыдущую запись, и до CSS доезжало только последнее свойство.
+
+   Теперь правки складываются в очередь и пишутся одним пакетом —
+   один шаг истории, ничего не теряется.
+============================================================ */
 let commitTimer = null;
 let revealTimer = null;
+const pendingCommits = new Map();   // селектор -> Map(свойство -> {value, useVariables})
+const COMMIT_DELAY = 260;
+
+function queueCommit(sel, property, value, useVariables) {
+    if (!pendingCommits.has(sel)) pendingCommits.set(sel, new Map());
+    pendingCommits.get(sel).set(property, { value, useVariables });
+
+    clearTimeout(commitTimer);
+    commitTimer = setTimeout(flushCommits, COMMIT_DELAY);
+}
+
+/** Немедленно дописать всё, что висит в очереди */
+function flushCommits() {
+    clearTimeout(commitTimer);
+    commitTimer = null;
+    if (!pendingCommits.size) return;
+
+    const queue = new Map(pendingCommits);
+    pendingCommits.clear();
+
+    let next = customCSS;
+    let lastSel = null;
+    let lastProp = null;
+
+    for (const [sel, decls] of queue) {
+        for (const [property, entry] of decls) {
+            next = generator.updateRule(next, sel, property, entry.value, {
+                useVariables: entry.useVariables,
+                editInPlace: cfg().editInPlace,
+            });
+            lastSel = sel;
+            lastProp = property;
+        }
+    }
+
+    if (next === customCSS) return;
+
+    pushHistory(next);
+    writeCSS(next);
+    if (lastSel) revealInEditor(lastSel, lastProp);
+}
+
+/** Выбросить очередь без записи — нужно для undo/redo и правки кода вручную */
+function dropPendingCommits() {
+    clearTimeout(commitTimer);
+    commitTimer = null;
+    pendingCommits.clear();
+}
 
 /** Прокручивает панель кода к тому месту, куда только что записали */
 function revealInEditor(sel, property) {
@@ -607,6 +671,7 @@ function revealInEditor(sel, property) {
 
 function handlePropertyChange(sel, property, value, opts = {}) {
     if (property === '__reset__') {
+        dropPendingCommits();
         const next = generator.updateRule(customCSS, sel, '__reset__', '');
         dropPreviewFor(sel);
         pushHistory(next);
@@ -617,6 +682,11 @@ function handlePropertyChange(sel, property, value, opts = {}) {
 
     previewProperty(sel, property, value);
 
+    // Ползунок ещё тянут: показываем предпросмотр, но CSS не переписываем.
+    // Раньше этот флаг игнорировался, и каждое движение мыши создавало
+    // шаг истории и запись в CSS.
+    if (opts.live) return;
+
     // Переменная темы живёт в :root и действует на весь интерфейс.
     // Для псевдоэлемента это почти всегда не то, что человек хотел:
     // менял одну иконку, а поехали все. Пишем обычное правило.
@@ -625,38 +695,23 @@ function handlePropertyChange(sel, property, value, opts = {}) {
         ? false
         : (opts.useVariables ?? cfg().useVariables);
 
+    queueCommit(sel, property, value, useVariables);
+}
+
+/** Пишет сразу несколько свойств. Несколько вызовов подряд склеиваются в один шаг истории */
+function handleBatchChange(sel, decls) {
+    for (const [prop, value] of Object.entries(decls)) {
+        queueCommit(sel, prop, value === '' ? '' : value, false);
+    }
+    // Нулевая задержка: все writeDecls внутри одного «Применить» выполняются
+    // подряд, поэтому успевают попасть в одну очередь и один шаг истории.
     clearTimeout(commitTimer);
     commitTimer = setTimeout(() => {
-        const next = generator.updateRule(customCSS, sel, property, value, {
-            useVariables,
-            editInPlace: cfg().editInPlace,
-        });
-        if (next === customCSS) return;
-        pushHistory(next);
-        writeCSS(next);
-        revealInEditor(sel, property);
-    }, 260);
+        flushCommits();
+        dropPreviewFor(sel);
+    }, 0);
 }
-/** Пишет сразу несколько свойств одним шагом истории */
-function handleBatchChange(sel, decls) {
-    clearTimeout(commitTimer);
-    commitTimer = null;
 
-    let next = customCSS;
-    for (const [prop, value] of Object.entries(decls)) {
-        next = generator.updateRule(next, sel, prop, value === '' ? '' : value, {
-            useVariables: false,
-            editInPlace: cfg().editInPlace,
-        });
-    }
-    if (next === customCSS) return;
-
-    // Значения уже в CSS, слой предпросмотра только мешал бы
-    dropPreviewFor(sel);
-    pushHistory(next);
-    writeCSS(next);
-    revealInEditor(sel, Object.keys(decls)[0]);
-}
 
 function handleVarInfoRequest(sel, property, opts = {}) {
     const wantVars = opts.useVariables ?? cfg().useVariables;
@@ -706,6 +761,10 @@ function handleFontSelected(payload) {
 }
 
 function handleCodeChange(css) {
+    // Человек правит код руками — это источник истины,
+    // отложенные правки ползунков выбрасываем
+    dropPendingCommits();
+
     const errors = generator.validate(css);
     if (errors.length) {
         toast(`В CSS ${errors.length} замечаний, смотрите панель кода`, 'warning');
@@ -1251,34 +1310,20 @@ function watchThemeSwitch() {
         if (name) { try { ev.on(name, () => setTimeout(resync, 300)); } catch {} }
     });
 }
+
 function handleTextApply(ruleset, opts = {}) {
     if (!ruleset?.length) return;
 
-    clearTimeout(commitTimer);
-    commitTimer = null;
-
-    let next = customCSS;
-
     for (const { selector, decls } of ruleset) {
         for (const [prop, value] of Object.entries(decls)) {
-            const val = value === '' ? 'unset' : value;
-            next = generator.updateRule(next, selector, prop, val, {
-                useVariables: false,
-                editInPlace: cfg().editInPlace,
-            });
+            queueCommit(selector, prop, value === '' ? 'unset' : value, false);
         }
     }
 
-    if (next === customCSS) return;
-
+    flushCommits();
     clearPreviewStyles();
-    pushHistory(next);
-    writeCSS(next);
-
-    if (ruleset[0]?.selector) {
-        revealInEditor(ruleset[0].selector, Object.keys(ruleset[0].decls)[0]);
-    }
 }
+
 /* ============================================================
    СТАРТ
 ============================================================ */
@@ -1312,6 +1357,7 @@ async function boot() {
         onPropertyChange: handlePropertyChange,
         onBatchChange: handleBatchChange,
         onTextApply: handleTextApply,
+        onDone: () => flushCommits(),
         onRequestVarInfo: handleVarInfoRequest,
         onFontsTabMount: (el) => fonts.mount(el),
         onPickAgain: () => startPicking(),
@@ -1320,7 +1366,6 @@ async function boot() {
         onRedo: redo,
         picker,
     });
-
 
     templates.init({
         store: cfg(),
