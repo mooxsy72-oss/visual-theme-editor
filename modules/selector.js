@@ -60,6 +60,7 @@ export function activate() {
     document.addEventListener('click', onClick, true);
     document.addEventListener('wheel', onWheel, { capture: true, passive: false });
     document.addEventListener('keydown', onKey, true);
+    document.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('scroll', scheduleRefresh, true);
     window.addEventListener('resize', scheduleRefresh);
 
@@ -77,6 +78,8 @@ export function deactivate() {
     document.removeEventListener('click', onClick, true);
     document.removeEventListener('wheel', onWheel, { capture: true });
     document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('keyup', onKeyUp, true);
+    shiftHeld = false;
     window.removeEventListener('scroll', scheduleRefresh, true);
     window.removeEventListener('resize', scheduleRefresh);
 
@@ -171,6 +174,7 @@ function renderHint() {
     const rows = [
         ['Клик', 'выбрать подсвеченное'],
         ['Alt + колесо', 'родитель / потомок'],
+        ['Shift + угол', 'общий фон (body)'],
         ['Esc', 'выйти из режима'],
     ];
     for (const [key, text] of rows) {
@@ -391,12 +395,27 @@ function onWheel(e) {
 
 function onKey(e) {
     if (!active) return;
+
+    if (e.key === 'Shift') {
+        shiftHeld = true;
+        // Подсветка должна сразу перескочить на body, не дожидаясь движения мыши
+        if (lastEvent) onMove(lastEvent);
+    }
+
     if (e.key === 'Escape') {
         // Курсор в полях панели: Esc там закрывает пикер цвета,
         // а не режим выбора целиком
         if (overOurUI(document.activeElement)) return;
         e.preventDefault();
         deactivate();
+    }
+}
+
+function onKeyUp(e) {
+    if (!active) return;
+    if (e.key === 'Shift') {
+        shiftHeld = false;
+        if (lastEvent) onMove(lastEvent);
     }
 }
 
@@ -414,18 +433,24 @@ function childUnderCursor(parent) {
 /* ============================================================
    УГЛОВЫЕ ЗОНЫ — ВЫБОР ОБЩЕГО ФОНА (body)
 
-   Верхние углы экрана (top × side px) → возвращают document.body.
-   Ширину и высоту зон меняй здесь:
+   Верхние углы экрана + зажатый Shift → возвращают document.body.
+
+   Раньше зона была 140 × 72 px и работала без модификатора, поэтому
+   накрывала #nav-toggle и иконки топбара: выбрать их было невозможно,
+   вместо них всегда бралcя body.
 ============================================================ */
-const BODY_ZONE = { top: 72, side: 140 };
+const BODY_ZONE = { top: 48, side: 80 };
+let shiftHeld = false;
 
 function getCornerTarget(x, y) {
+    if (!shiftHeld) return null;
     if (y > BODY_ZONE.top) return null;
     if (x <= BODY_ZONE.side || x >= window.innerWidth - BODY_ZONE.side) {
         return document.body;
     }
     return null;
 }
+
 
 /* ============================================================
    ОТРИСОВКА
