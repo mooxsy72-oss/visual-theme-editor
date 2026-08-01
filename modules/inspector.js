@@ -308,12 +308,16 @@ export function createPanel() {
 }
 
 export function hidePanel() {
+    // Палитру закрываем первой и с записью: она может держать выбранный,
+    // но ещё не выписанный цвет. close(false) его просто выбрасывал.
+    picker?.close?.(true);
+
     // «Готово» может быть нажато раньше, чем сработает таймер записи.
     // Без этого вызова последняя правка оставалась только в предпросмотре
     // и пропадала при выключении редактора.
     onDone?.();
+
     if (panel) panel.style.display = 'none';
-    picker?.close?.(false);
 }
 
 function switchTab(id) {
@@ -874,14 +878,19 @@ function colorField(label, prop, value, allowGradient) {
 
     swatch.addEventListener('click', () => {
         if (!picker) return;
+        const before = currentColor;
         picker.open({
             anchor: swatch,
             value: currentColor,
             allowGradient,
             onChange: (v) => push(v, true),
             onCommit: (v) => push(v, false),
+            // Отмена: в CSS ничего не записано, но слой предпросмотра
+            // продолжал показывать отменённый цвет. Возвращаем как было.
+            onCancel: () => push(before, true),
         });
     });
+
 
     hexInput.addEventListener('change', () => {
         const raw = hexInput.value.trim();
@@ -1215,12 +1224,14 @@ function shadowGroup() {
     });
 
     swatch.addEventListener('click', () => {
+        const before = state.color;
         picker?.open({
             anchor: swatch,
             value: state.color,
             allowGradient: false,
             onChange: (v) => { state.color = v; swatch.style.background = v; sendLive('box-shadow', build()); },
             onCommit: (v) => { state.color = v; swatch.style.background = v; commitNow('box-shadow', build()); },
+            onCancel: () => { state.color = before; swatch.style.background = before; sendLive('box-shadow', build()); },
         });
     });
 
