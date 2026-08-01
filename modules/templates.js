@@ -198,8 +198,12 @@ export function startCollect(id) {
 export function stopCollect() {
     if (!collectingId) return;
     const t = byId(collectingId);
-    collectingId = null;
+
+    // Прицел гасим ДО обнуления collectingId: обработчик onStateChange
+    // в index.js спрашивает isCollecting(), чтобы не показывать лишний тост.
     onStopPick();
+
+    collectingId = null;
     render();
     if (t) {
         say(t.items.length
@@ -207,6 +211,7 @@ export function stopCollect() {
             : `Шаблон «${t.name}» пока пуст`);
     }
 }
+
 
 /* ============================================================
    ОПЕРАЦИИ С ШАБЛОНАМИ
