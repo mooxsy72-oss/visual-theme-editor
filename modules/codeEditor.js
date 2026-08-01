@@ -25,6 +25,7 @@ let syncScheduled = false;
 let changeTimer = null;
 let renderTimer = null;
 let plainMode = false;
+let appliedValue = null;   // текст, который уже отдан наружу через onCodeChange
 
 /* --- Локальная история панели кода --- */
 let undoStack = [];
@@ -460,6 +461,7 @@ export function setContent(css, opts = {}) {
     noteExternalChange(css || '');
 
     currentValue = css || '';
+    appliedValue = currentValue;
     ta.value = currentValue;
 
     const p = Math.min(pos || 0, currentValue.length);
@@ -474,7 +476,34 @@ export function setContent(css, opts = {}) {
     });
 
     scheduleRender(0);
-    if (!opts.silent) markDirty(false);
+
+    // Текст в панели снова совпадает с темой, поэтому отложенная отправка
+    // не нужна, а точка «не сохранено» гаснет в любом случае. Раньше при
+    // silent она оставалась висеть насовсем.
+    clearTimeout(changeTimer);
+    changeTimer = null;
+    markDirty(false);
+}
+
+/** Есть ли в панели набранный текст, который ещё не применён к теме */
+export function hasPendingEdits() {
+    return !!ta && appliedValue !== null && ta.value !== appliedValue;
+}
+
+/**
+ * Применить набранный текст немедленно, не дожидаясь задержки в 500 мс.
+ * Нужно перед любой записью CSS со стороны панели свойств: иначе
+ * setContent затрёт то, что человек только что напечатал.
+ */
+export function flushPending() {
+    if (!hasPendingEdits()) return false;
+    clearTimeout(changeTimer);
+    changeTimer = null;
+    currentValue = ta.value;
+    appliedValue = currentValue;
+    onCodeChange(currentValue);
+    markDirty(false);
+    return true;
 }
 
 export function getContent() {
@@ -609,6 +638,8 @@ function handleInput() {
 
     clearTimeout(changeTimer);
     changeTimer = setTimeout(() => {
+        changeTimer = null;
+        appliedValue = currentValue;
         onCodeChange(currentValue);
         markDirty(false);
     }, CHANGE_DEBOUNCE);
@@ -1423,6 +1454,8 @@ function applyHistoryEntry(entry) {
     updateHistoryBtns();
 
     clearTimeout(changeTimer);
+    changeTimer = null;
+    appliedValue = currentValue;
     onCodeChange(currentValue);
     markDirty(false);
 }
