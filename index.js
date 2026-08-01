@@ -34,6 +34,8 @@ const DEFAULTS = {
     showCode: true,
     useVariables: true,
     liveApply: true,
+    editInPlace: false,             // экспериментально: править код темы на месте
+    followCode: true,               // панель кода сама прыгает к новым строкам
     hotkey: true,
     pickerOnStart: false,           // включать прицел сразу вместе с редактором
     pickOnce: true,                 // после выбора элемента прицел выключается
@@ -57,17 +59,19 @@ function persist() {
 /* ============================================================
    ЗАГРУЗКА МОДУЛЕЙ
 ============================================================ */
-let selector, inspector, generator, fonts, editor, picker;
+let selector, inspector, generator, fonts, editor, picker, rules, templates;
 
 async function loadModules() {
     const load = (name) => import(`${BASE}/modules/${name}.js`);
-    [selector, inspector, generator, fonts, editor, picker] = await Promise.all([
+    [selector, inspector, generator, fonts, editor, picker, rules, templates] = await Promise.all([
         load('selector'),
         load('inspector'),
         load('cssGenerator'),
         load('fontManager'),
         load('codeEditor'),
         load('colorPicker'),
+        load('cssRules'),
+        load('templates'),
     ]);
 }
 
@@ -148,20 +152,52 @@ function pushHistory(css) {
 
 function undo() {
     if (history.length < 2) return;
+
+    // Правка после ползунка пишется с задержкой 260 мс. Если не снять
+    // этот таймер, он сработает уже после отмены и вернёт всё назад.
+    clearTimeout(commitTimer);
+    commitTimer = null;
+
     future.push(history.pop());
-    writeCSS(history[history.length - 1]);
+    const css = history[history.length - 1];
+
+    // Слой предпросмотра держит значения с !important и перекрывает
+    // откаченный CSS. Без этой строки отмена не видна на экране.
+    clearPreviewStyles();
+
+    writeCSS(css);
     updateHistoryButtons();
+    refreshInspector();
     toast('Отменено');
 }
 
 function redo() {
     if (!future.length) return;
+
+    clearTimeout(commitTimer);
+    commitTimer = null;
+
     const css = future.pop();
     history.push(css);
+    clearPreviewStyles();
     writeCSS(css);
     updateHistoryButtons();
+    refreshInspector();
     toast('Возвращено');
 }
+
+/**
+ * После отмены поля панели обязаны перечитать значения из CSS.
+ * Небольшая задержка нужна, чтобы браузер успел применить новый стиль.
+ */
+let refreshTimer = null;
+function refreshInspector() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+        try { inspector.refreshValues?.(); } catch {}
+    }, 120);
+}
+
 
 function updateHistoryButtons() {
     const u = document.getElementById('vte-undo');
@@ -216,6 +252,8 @@ function deactivate() {
     selector.deactivate();
     inspector.hidePanel();
     editor.hidePanel();
+    templates?.stopCollect?.();
+    templates?.hidePanel?.();
     fonts.stopPreview?.();
     clearPreviewStyles();
 
@@ -293,19 +331,279 @@ function dropPreviewFor(sel) {
 /* ============================================================
    ОБРАБОТЧИКИ МОДУЛЕЙ
 ============================================================ */
-function handleElementSelected(el) {
-    const sel = generator.generateSelector(el);
-    if (!sel) {
+/* ---------- Индекс правил темы, пересобирается при смене CSS ---------- */
+let ruleIndex = null;
+let ruleIndexFor = null;
+
+function getRuleIndex() {
+    const css = customCSS || readCSS();
+    if (!ruleIndex || ruleIndexFor !== css) {
+        ruleIndex = rules.buildIndex(css);
+        ruleIndexFor = css;
+    }
+    return ruleIndex;
+}
+
+function shortLabel(v) {
+    const s = String(v).replace(/\s+/g, ' ').trim();
+    return s.length > 46 ? s.slice(0, 43) + '…' : s;
+}
+
+/** Селекторы из темы, которые реально попадают в этот элемент/псевдоэлемент */
+function themeSelectorsFor(el, pseudo) {
+    const out = [];
+    let matches = [];
+    try {
+        matches = rules.findMatches(getRuleIndex(), el, pseudo || null) || [];
+    } catch (err) {
+        console.warn('[VTE] Не удалось разобрать CSS темы:', err);
+        return out;
+    }
+    for (const m of matches) {
+        if (m.part.states.length) continue;            // :hover вслепую не правим
+        if (!rules.isContextActive(m.rule)) continue;  // @media, который сейчас не действует
+        const value = m.part.raw;
+        if (out.some(o => o.value === value)) continue;
+        out.push({
+            value,
+            label: shortLabel(value),
+            source: 'theme',
+            hint: rules.describeRule(m.rule),
+        });
+        if (out.length >= 5) break;
+    }
+    return out;
+}
+
+/** Сам элемент ничего не рисует, а псевдоэлемент рисует? Значит правим псевдо. */
+function isVisuallyEmpty(el) {
+    try {
+        const cs = getComputedStyle(el);
+        const fs = parseFloat(cs.fontSize) || 0;
+        const textHidden = fs < 4
+            || cs.color === 'transparent'
+            || /rgba\(0, 0, 0, 0\)/.test(cs.color || '');
+        const noText = !String(el.textContent || '').trim() || textHidden;
+        const noBg = cs.backgroundImage === 'none'
+            && (!cs.backgroundColor || /transparent|rgba\(0, 0, 0, 0\)/.test(cs.backgroundColor));
+        return noText && noBg;
+    } catch {
+        return false;
+    }
+}
+
+function cssEsc(v) {
+    if (window.CSS?.escape) return CSS.escape(v);
+    return String(v).replace(/([^\w-])/g, '\\$1');
+}
+
+/**
+ * Собирает селектор, который целится ТОЛЬКО в этот элемент и при этом
+ * сильнее правил темы. Без усиления `#rightNavDrawerIcon::after` (10001)
+ * проигрывает `#top-settings-holder .drawer-icon::after` (10101),
+ * и правка просто не видна.
+ */
+function strongSelectorFor(el, base, pseudo, competitors) {
+    if (!base) return null;
+
+    const need = competitors.reduce(
+        (max, c) => Math.max(max, rules.specificityScore(c)), 0);
+
+    const hits = (s) => {
+        try { return el.matches(s) ? document.querySelectorAll(s).length : 0; }
+        catch { return 0; }
+    };
+    const stronger = (s) => rules.specificityScore(s + pseudo) > need;
+
+    if (hits(base) === 1 && stronger(base)) {
+        return { value: base + pseudo, unique: true };
+    }
+
+    // Добавляем родительские id: каждый поднимает специфичность на 10000
+    const ids = [];
+    let p = el.parentElement;
+    while (p && p !== document.documentElement && ids.length < 4) {
+        if (p.id && /^[a-z][\w-]{1,60}$/i.test(p.id)) ids.push('#' + cssEsc(p.id));
+        p = p.parentElement;
+    }
+
+    let cur = base;
+    for (const id of ids) {
+        cur = `${id} ${cur}`;
+        if (hits(cur) === 1 && stronger(cur)) {
+            return { value: cur + pseudo, unique: true };
+        }
+    }
+
+    // Не хватило — доводим собственными классами элемента
+    let withClasses = cur;
+    for (const c of Array.from(el.classList)) {
+        if (c.startsWith('vte-')) continue;
+        withClasses += '.' + cssEsc(c);
+        if (hits(withClasses) === 1 && stronger(withClasses)) {
+            return { value: withClasses + pseudo, unique: true };
+        }
+    }
+
+    const best = hits(withClasses) ? withClasses : (hits(cur) ? cur : base);
+    return { value: best + pseudo, unique: hits(best) === 1 };
+}
+
+function buildTargets(el) {
+    const base = generator.generateSelector(el);
+    if (!base) return null;
+
+    // Слои предлагаем всегда: ::before и ::after — это законные цели,
+    // даже если сейчас они ничего не рисуют. Вкладка «Картинка» сама
+    // допишет content, когда положит туда изображение.
+    const pseudos = ['', '::before', '::after'];
+
+    const options = {};
+    for (const p of pseudos) {
+        const theme = themeSelectorsFor(el, p);
+        const list = theme.slice();
+
+        const own = strongSelectorFor(el, base, p, theme.map(t => t.value));
+        if (own && !list.some(o => o.value === own.value)) {
+            list.push({
+                value: own.value,
+                label: (own.unique ? 'только этот элемент — ' : 'этот элемент — ')
+                    + shortLabel(own.value),
+                source: 'generated',
+                hint: own.unique
+                    ? 'Новое правило, затронет только выбранный элемент'
+                    : 'Новое правило, но селектор попадает и в другие элементы',
+            });
+        }
+        options[p] = list;
+    }
+
+    // Сам элемент ничего не рисует, а псевдоэлемент рисует — целимся в псевдо
+    let pseudo = '';
+    const painted = ['::before', '::after'].filter(p => rules.hasPseudo(el, p));
+    if (painted.length && isVisuallyEmpty(el)) pseudo = painted[painted.length - 1];
+
+    return { element: el, pseudos, pseudo, baseSelector: base, options };
+}
+
+function inspectElement(el) {
+    if (!el || el.nodeType !== 1) return;
+
+    const info = buildTargets(el);
+    if (!info) {
         toast('Не удалось определить селектор для этого элемента');
         return;
     }
-    inspector.populateProperties(el, getComputedStyle(el), sel);
 
+    const start = info.options[info.pseudo]?.[0]?.value
+        || (info.baseSelector + info.pseudo);
+
+    inspector.populateProperties(el, rules.computedFor(el, info.pseudo), start, info);
+
+    if (info.pseudo) {
+        toast(`Целюсь в ${info.pseudo} — картинка нарисована там`);
+    }
+}
+
+function handleElementSelected(el) {
+    // Идёт набор шаблона — элемент уходит в группу, панель свойств не трогаем
+    // и прицел не гасим: человек набирает несколько элементов подряд.
+    if (templates?.isCollecting?.() && templates.handlePicked(el)) return;
+
+    inspectElement(el);
     // По умолчанию прицел выключается сразу после выбора, чтобы не мешал работать
     if (cfg().pickOnce) stopPicking();
 }
 
+/* ============================================================
+   ПРАВКА ГРУППЫ ЭЛЕМЕНТОВ ПО ШАБЛОНУ
+
+   У группы нет одного элемента, поэтому значения для полей панели
+   читаются с первого найденного элемента-представителя, а запись
+   идёт в общий селектор со списком через запятую.
+============================================================ */
+function editTemplateGroup(groupSelector, tpl) {
+    if (!groupSelector) return;
+    if (!active) activate();
+
+    // Представитель: первый элемент, который реально есть на странице
+    let sample = null;
+    for (const part of groupSelector.split(',')) {
+        try { sample = document.querySelector(part.trim()); } catch { sample = null; }
+        if (sample) break;
+    }
+
+    if (!sample) {
+        toast('Ни один элемент шаблона сейчас не найден на странице', 'warning');
+        return;
+    }
+
+    // Псевдоэлемент нужно дописать КАЖДОМУ селектору списка.
+    // 'a, b' + '::after' → 'a::after, b::after'.
+    // Простая склейка давала 'a, b::after' и правило доезжало только до b.
+    const spread = (p) => p
+        ? groupSelector.split(',').map(s => s.trim()).filter(Boolean)
+            .map(s => s + p).join(', ')
+        : groupSelector;
+
+    const pseudos = ['', '::before', '::after'];
+    const options = {};
+    for (const p of pseudos) {
+        options[p] = [{
+            value: spread(p),
+            label: `группа «${tpl?.name || 'шаблон'}» — ${tpl?.items?.length || 0} шт.`,
+            source: 'generated',
+            hint: spread(p),
+        }];
+    }
+
+    const info = {
+        element: sample,
+        pseudos,
+        pseudo: '',
+        baseSelector: groupSelector,
+        options,
+    };
+
+    inspector.populateProperties(sample, rules.computedFor(sample, ''), groupSelector, info);
+    inspector.setGroup(tpl?.name || 'шаблон');
+    toast(`Правим группу «${tpl?.name || 'шаблон'}» — правки пойдут на все элементы`);
+}
+
+function toggleTemplates() {
+    if (!active) activate();
+    templates.togglePanel();
+}
+
 let commitTimer = null;
+let revealTimer = null;
+
+/** Прокручивает панель кода к тому месту, куда только что записали */
+function revealInEditor(sel, property) {
+    if (!cfg().followCode) return;
+    if (!editor?.isOpen?.()) return;
+
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(() => {
+        let idx;
+        try { idx = rules.buildIndex(customCSS); } catch { return; }
+
+        const key = String(sel).replace(/\s+/g, ' ').trim();
+        let hit = null;
+        for (const rule of idx.rules) {
+            if (rule.parts.some(p => p.raw.replace(/\s+/g, ' ') === key)) hit = rule;
+        }
+        if (!hit) return;
+
+        let from = hit.ruleStart;
+        let to = hit.ruleEnd;
+        if (property) {
+            const d = rules.findDeclaration(hit, property);
+            if (d) { from = d.start; to = d.end; }
+        }
+        editor.revealRange(from, to, { focus: false });
+    }, 140);
+}
 
 function handlePropertyChange(sel, property, value, opts = {}) {
     if (property === '__reset__') {
@@ -313,26 +611,78 @@ function handlePropertyChange(sel, property, value, opts = {}) {
         dropPreviewFor(sel);
         pushHistory(next);
         writeCSS(next);
-        toast('Правила для элемента убраны');
+        toast('Правила для цели убраны');
         return;
     }
 
     previewProperty(sel, property, value);
 
+    // Переменная темы живёт в :root и действует на весь интерфейс.
+    // Для псевдоэлемента это почти всегда не то, что человек хотел:
+    // менял одну иконку, а поехали все. Пишем обычное правило.
+    const isPseudo = String(sel).includes('::');
+    const useVariables = isPseudo
+        ? false
+        : (opts.useVariables ?? cfg().useVariables);
+
     clearTimeout(commitTimer);
     commitTimer = setTimeout(() => {
         const next = generator.updateRule(customCSS, sel, property, value, {
-            useVariables: opts.useVariables ?? cfg().useVariables,
+            useVariables,
+            editInPlace: cfg().editInPlace,
         });
         if (next === customCSS) return;
         pushHistory(next);
         writeCSS(next);
+        revealInEditor(sel, property);
     }, 260);
 }
+/** Пишет сразу несколько свойств одним шагом истории */
+function handleBatchChange(sel, decls) {
+    clearTimeout(commitTimer);
+    commitTimer = null;
 
-function handleVarInfoRequest(sel, property) {
-    if (!cfg().useVariables) return null;
-    try { return generator.findVariable(sel, property); } catch { return null; }
+    let next = customCSS;
+    for (const [prop, value] of Object.entries(decls)) {
+        next = generator.updateRule(next, sel, prop, value === '' ? '' : value, {
+            useVariables: false,
+            editInPlace: cfg().editInPlace,
+        });
+    }
+    if (next === customCSS) return;
+
+    // Значения уже в CSS, слой предпросмотра только мешал бы
+    dropPreviewFor(sel);
+    pushHistory(next);
+    writeCSS(next);
+    revealInEditor(sel, Object.keys(decls)[0]);
+}
+
+function handleVarInfoRequest(sel, property, opts = {}) {
+    const wantVars = opts.useVariables ?? cfg().useVariables;
+
+    if (wantVars) {
+        try {
+            const v = generator.findVariable(sel, property);
+            if (v?.name) return { mode: 'variable', name: v.name };
+        } catch {}
+    }
+
+    if (cfg().editInPlace) {
+        try {
+            const spot = generator.findEditSpot(customCSS, sel, property);
+            if (spot) {
+                return {
+                    mode: 'in-place',
+                    line: spot.line,
+                    selector: spot.selector,
+                    hasProperty: spot.hasProperty,
+                };
+            }
+        } catch {}
+    }
+
+    return { mode: 'auto' };
 }
 
 function handleFontSelected(payload) {
@@ -434,6 +784,16 @@ function mountWandItem() {
         }, [
             h('div.fa-solid.fa-crosshairs.extensionsMenuExtensionButton'),
             h('span#vte-wand-pick-label', { text: 'Выбрать элемент для правки' }),
+        ]));
+    }
+
+    if (!document.getElementById('vte-wand-tpl')) {
+        menu.appendChild(h('div#vte-wand-tpl.list-group-item.flex-container.flexGap5.interactable', {
+            tabIndex: 0,
+            on: { click: toggleTemplates },
+        }, [
+            h('div.fa-solid.fa-layer-group.extensionsMenuExtensionButton'),
+            h('span', { text: 'Шаблоны групп элементов' }),
         ]));
     }
 
@@ -585,6 +945,9 @@ function mountSettingsPanel() {
             'Менять значения в :root, если подходящая переменная уже есть в теме'),
         check('liveApply', 'Мгновенный предпросмотр',
             'Изменения видны сразу, до записи в CSS'),
+        check('editInPlace', 'Править код темы на месте (экспериментально)',
+            'Если правило для элемента уже есть в вашем CSS, значение меняется прямо в нём. '
+            + 'Правила со списком селекторов через запятую по-прежнему идут в авто-блок'),
         check('showCode', 'Показывать панель кода', null, (v) => {
             if (!active) return;
             v ? editor.showPanel() : editor.hidePanel();
@@ -687,6 +1050,12 @@ function mountSettingsPanel() {
         },
     }, [icon('fa-code'), h('span', { text: ' Открыть код' })]);
 
+    const tplBtn = h('button.menu_button', {
+        type: 'button',
+        title: 'Собрать группу однотипных элементов и править их вместе',
+        on: { click: toggleTemplates },
+    }, [icon('fa-layer-group'), h('span', { text: ' Шаблоны групп' })]);
+
     const cleanBtn = h('button.menu_button', {
         type: 'button',
         on: { click: removeAutoBlock },
@@ -697,7 +1066,7 @@ function mountSettingsPanel() {
         on: { click: exportCSS },
     }, [icon('fa-download'), h('span', { text: ' Скачать CSS' })]);
 
-    const toolsRow = h('div.vte-settings-actions', {}, [codeBtn, cleanBtn, exportBtn]);
+    const toolsRow = h('div.vte-settings-actions', {}, [codeBtn, tplBtn, cleanBtn, exportBtn]);
 
     const varsBox = h('div#vte-settings-vars.vte-settings-vars');
     const varsBtn = h('button.menu_button', {
@@ -861,8 +1230,19 @@ function watchThemeSwitch() {
         if (css === customCSS) return;
         customCSS = css;
         generator.parse(css);
-        history = [css];
-        future = [];
+
+        if (active) {
+            // Редактор открыт — это просто ещё один шаг, а не новая тема.
+            // Раньше здесь история обнулялась, и отменять становилось нечего.
+            if (history[history.length - 1] !== css) {
+                history.push(css);
+                if (history.length > HISTORY_LIMIT) history.shift();
+            }
+        } else {
+            history = [css];
+            future = [];
+        }
+
         updateHistoryButtons();
         if (editor?.isOpen?.()) editor.setContent(css, { silent: true });
     };
@@ -871,7 +1251,34 @@ function watchThemeSwitch() {
         if (name) { try { ev.on(name, () => setTimeout(resync, 300)); } catch {} }
     });
 }
+function handleTextApply(ruleset, opts = {}) {
+    if (!ruleset?.length) return;
 
+    clearTimeout(commitTimer);
+    commitTimer = null;
+
+    let next = customCSS;
+
+    for (const { selector, decls } of ruleset) {
+        for (const [prop, value] of Object.entries(decls)) {
+            const val = value === '' ? 'unset' : value;
+            next = generator.updateRule(next, selector, prop, val, {
+                useVariables: false,
+                editInPlace: cfg().editInPlace,
+            });
+        }
+    }
+
+    if (next === customCSS) return;
+
+    clearPreviewStyles();
+    pushHistory(next);
+    writeCSS(next);
+
+    if (ruleset[0]?.selector) {
+        revealInEditor(ruleset[0].selector, Object.keys(ruleset[0].decls)[0]);
+    }
+}
 /* ============================================================
    СТАРТ
 ============================================================ */
@@ -892,19 +1299,37 @@ async function boot() {
         onElementSelected: handleElementSelected,
         onStateChange: (on) => {
             updatePickUI();
-            if (!on && active) toast('Выбор элемента выключен');
+            // Во время набора шаблона прицел гаснет по кнопке «Готово»,
+            // сообщать об этом отдельно не нужно
+            if (!on && active && !templates.isCollecting()) {
+                toast('Выбор элемента выключен');
+            }
         },
         highlightColor: cfg().highlightColor,
     });
 
     inspector.init({
         onPropertyChange: handlePropertyChange,
+        onBatchChange: handleBatchChange,
+        onTextApply: handleTextApply,
         onRequestVarInfo: handleVarInfoRequest,
         onFontsTabMount: (el) => fonts.mount(el),
         onPickAgain: () => startPicking(),
+        onOpenTemplates: () => toggleTemplates(),
         onUndo: undo,
         onRedo: redo,
         picker,
+    });
+
+
+    templates.init({
+        store: cfg(),
+        persist,
+        onRequestPick: () => startPicking(),
+        onStopPick: () => stopPicking(),
+        onEditTemplate: editTemplateGroup,
+        onSelectorFor: (el) => generator.generateSelector(el),
+        onToast: (text) => toast(text),
     });
 
     fonts.init({
@@ -937,16 +1362,30 @@ async function boot() {
         stopPicking,
         togglePicking,
         isPicking,
+        inspect: inspectElement,
         getCSS: readCSS,
         setCSS: (css) => { pushHistory(css); writeCSS(css); },
         undo,
         redo,
         variables: () => { generator.parse(readCSS()); return generator.getVariables(); },
         selectorFor: (el) => generator.generateSelector(el),
+        targetsFor: (el) => buildTargets(el),
+        ruleIndex: () => getRuleIndex(),
+        templates: {
+            panel: () => templates.togglePanel(),
+            list: () => cfg().templates,
+            active: () => templates.getActive(),
+            selector: () => templates.activeSelector(),
+            edit: (id) => {
+                const t = templates.setActive(id);
+                if (t) editTemplateGroup(t.items.map(i => i.selector).join(', '), t);
+            },
+        },
     };
 
     console.log('[VTE] Visual Theme Editor готов ✓');
 }
+
 /* ============================================================
    ЗАПУСК
 ============================================================ */
