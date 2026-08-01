@@ -600,9 +600,9 @@ let revealTimer = null;
 const pendingCommits = new Map();   // селектор -> Map(свойство -> {value, useVariables})
 const COMMIT_DELAY = 260;
 
-function queueCommit(sel, property, value, useVariables) {
+function queueCommit(sel, property, value, useVariables, extra) {
     if (!pendingCommits.has(sel)) pendingCommits.set(sel, new Map());
-    pendingCommits.get(sel).set(property, { value, useVariables });
+    pendingCommits.get(sel).set(property, { value, useVariables, extra });
 
     clearTimeout(commitTimer);
     commitTimer = setTimeout(flushCommits, COMMIT_DELAY);
@@ -630,9 +630,13 @@ function flushCommits() {
 
     for (const [sel, decls] of queue) {
         for (const [property, entry] of decls) {
+            const inPlace = entry.extra?.editInPlace !== undefined
+                ? entry.extra.editInPlace
+                : cfg().editInPlace;
+
             next = generator.updateRule(next, sel, property, entry.value, {
                 useVariables: entry.useVariables,
-                editInPlace: cfg().editInPlace,
+                editInPlace: inPlace,
             });
             lastSel = sel;
             lastProp = property;
@@ -772,7 +776,7 @@ function handleFontSelected(payload) {
     toast(`Шрифт ${payload.family} применён`);
 }
 
-function handleCodeChange(css) {
+function handleCodeChange(css, opts = {}) {
     // Человек правит код руками — это источник истины,
     // отложенные правки ползунков выбрасываем
     dropPendingCommits();
@@ -781,7 +785,18 @@ function handleCodeChange(css) {
     if (errors.length) {
         toast(`В CSS ${errors.length} замечаний, смотрите панель кода`, 'warning');
     }
-    pushHistory(css);
+
+    if (opts.fromHistory) {
+        // Откат внутри панели кода: верхушку стека заменяем, а не добавляем.
+        // Так верхушка всегда равна текущему CSS, и лишнего шага не появляется.
+        if (history.length) history[history.length - 1] = css;
+        else history.push(css);
+        future.length = 0;
+        updateHistoryButtons();
+    } else {
+        pushHistory(css);
+    }
+
     writeCSS(css, { skipEditor: true });
     previewRules.clear();
     if (previewStyle) previewStyle.textContent = '';
@@ -1333,7 +1348,13 @@ function handleTextApply(ruleset, opts = {}) {
 
     for (const { selector, decls } of ruleset) {
         for (const [prop, value] of Object.entries(decls)) {
-            queueCommit(selector, prop, value === '' ? 'unset' : value, false);
+            const empty = value === '' || value == null;
+            // Сброс должен убирать ТОЛЬКО нашу строку из авто-блока.
+            // Раньше пустота превращалась в 'unset', а editInPlace понимал
+            // это как «удалить объявление» и вырезал свойство из самой темы.
+            queueCommit(selector, prop, empty ? '' : value, false, {
+                editInPlace: empty ? false : undefined,
+            });
         }
     }
 
